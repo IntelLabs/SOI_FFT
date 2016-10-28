@@ -1,34 +1,21 @@
 ifeq ($(MKLROOT),)
   #MKLROOT=/opt/intel/mkl/11.2.0.090/mkl
-		# endeavor
-  MKLROOT=/swtools/intel/mkl/
-  #MKLROOT=/opt/intel/composer_xe_2013.5.192/mkl
-  # alamere-snb06
-	# change me for different machines
 endif
 
-CC=mpiicc -cc=icc
-#BLACS=-lmkl_blacs_intelmpi_ilp64 -lnuma -L/usr/local/lib -L$(HOME)/usr/lib
+CC=mpiicc
 
-CFLAGS = -openmp -Qoption,cpp,--extended_float_type -D_XOPEN_SOURCE=600 #-vec-report=2
-CFLAGS += -DMKL_ILP64 -I$(MKLROOT)/include -I$(HOME)/usr/include #-no-offload
-CFLAGS += -D_MPI -mt_mpi #-static_mpi
+CFLAGS = -qopenmp -Qoption,cpp,--extended_float_type -D_XOPEN_SOURCE=600 #-vec-report=2
+CFLAGS += -DMKL_ILP64 -I$(MKLROOT)/include # -I$(HOME)/usr/include
+CFLAGS += -restrict -D_MPI -mt_mpi #-static_mpi
 #DBG = yes
 ifeq (yes, $(DBG))
-  CFLAGS += -O0 -g -restrict -D_DEBUG
+  CFLAGS += -O0 -g -D_DEBUG
 else
-  CFLAGS += -O3 -xCORE-AVX2 -fomit-frame-pointer -restrict -ipo -DNDEBUG
+  CFLAGS += -O3 -xCORE-AVX2 -DNDEBUG
 endif
-#CFLAGS += -D_MPI -DMKL_ILP64 -I $(HOME)/usr/include -Qoption,cpp,--extended_float_type -D_XOPEN_SOURCE=600
-#PERF_FLAGS += -mCG_use_unaligned_loads=0 -mCG_use_unaligned_stores=0 -mt_mpi -static_mpi
-
-#ifeq (yes, $(DBG))
-  #CDEFS+=-D_DEBUG
-#endif
 
 MKL_LIB_DIR = $(MKLROOT)/lib/intel64
 LDFLAGS = -L$(MKL_LIB_DIR) -Wl,--start-group $(MKL_LIB_DIR)/libmkl_cdft_core.a $(MKL_LIB_DIR)/libmkl_blacs_intelmpi_ilp64.a $(MKL_LIB_DIR)/libmkl_intel_ilp64.a $(MKL_LIB_DIR)/libmkl_intel_thread.a $(MKL_LIB_DIR)/libmkl_core.a -Wl,--end-group
-#LDFLAGS += -lnuma
 
 ifeq (yes, $(FFTW))
   CFLAGS += -DUSE_FFTW
