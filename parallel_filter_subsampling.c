@@ -157,8 +157,8 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
   for (cfft_size_t i = i_begin; i < i_end; i += CACHE_LINE_LEN/2) {
     input_buffer_ptr = 0;
     for (cfft_size_t k = 0; k < B - d_mu; k++) {
-      input_buffer[2*k] = _MM_LOAD((TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i));
-      input_buffer[2*k + 1] = _MM_LOAD((TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i) + SIMD_WIDTH);
+      input_buffer[2*k] = _MM_LOAD((VAL_TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i));
+      input_buffer[2*k + 1] = _MM_LOAD((VAL_TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i) + SIMD_WIDTH);
     }
 
     /*if (0 == d->PID && 0 == threadid) {
@@ -176,9 +176,9 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 
 #define LOAD_INPUT_TO_BUFFER(z, k, dummy) \
       input_buffer[(input_buffer_ptr + B - d_mu + k)%input_buffer_len*2] = \
-        _MM_LOAD((TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i)); \
+        _MM_LOAD((VAL_TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i)); \
       input_buffer[(input_buffer_ptr + B - d_mu + k)%input_buffer_len*2 + 1] = \
-        _MM_LOAD((TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i) + SIMD_WIDTH);
+        _MM_LOAD((VAL_TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i) + SIMD_WIDTH);
       //_MM_PREFETCH1(alpha_dt + (j*d_mu + B + k)*S + i);
 
       BOOST_PP_REPEAT(D_MU_TIMES_J_UNROLL_FACTOR, LOAD_INPUT_TO_BUFFER, dummy)
@@ -247,10 +247,10 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 
 #define STORE_TEMP_J_THETA(z, theta_arg, j_arg) \
       _MM_STREAM( \
-        (TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)), \
+        (VAL_TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)), \
         temp##j_arg##theta_arg##0); \
       _MM_STREAM( \
-        (TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)) + SIMD_WIDTH, \
+        (VAL_TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)) + SIMD_WIDTH, \
         temp##j_arg##theta_arg##1);
 #define STORE_TEMP_J(z, j_arg, dummy) BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, STORE_TEMP_J_THETA, j_arg)
       BOOST_PP_REPEAT(J_UNROLL_FACTOR, STORE_TEMP_J, dummy);
@@ -386,11 +386,11 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
       for (cfft_size_t i = 0; i < S; i += CACHE_LINE_LEN/2) {
         for (cfft_size_t ii = 0; ii < 2; ii++) {
           SIMDFPTYPE *in = d->w_dup + i*B*n_mu + theta*(CACHE_LINE_LEN/2) + ii*2;
-          //TYPE *in_end = d->w_dup + ((i + SIMD_WIDTH/2)*B*n_mu + theta*(CACHE_LINE_LEN/2))*SIMD_WIDTH;
+          //VAL_TYPE *in_end = d->w_dup + ((i + SIMD_WIDTH/2)*B*n_mu + theta*(CACHE_LINE_LEN/2))*SIMD_WIDTH;
 
           SIMDFPTYPE xl = _MM_LOAD(in);
           SIMDFPTYPE xh = _MM_LOAD(in + 1);
-          SIMDFPTYPE ytemp = _MM_LOAD((TYPE *)(alpha_dt + j*d_mu*S + i) + ii*SIMD_WIDTH);
+          SIMDFPTYPE ytemp = _MM_LOAD((VAL_TYPE *)(alpha_dt + j*d_mu*S + i) + ii*SIMD_WIDTH);
           SIMDFPTYPE temp = _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp)));
 
           in += n_mu*(CACHE_LINE_LEN/2);
@@ -398,10 +398,10 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
           for (cfft_size_t kkk = 1; kkk < B; kkk++, in += n_mu*(CACHE_LINE_LEN/2)) {
             xl = _MM_LOAD(in);
             xh = _MM_LOAD(in + 1);
-            ytemp = _MM_LOAD((TYPE *)(alpha_dt + (j*d_mu + kkk)*S + i) + ii*SIMD_WIDTH);
+            ytemp = _MM_LOAD((VAL_TYPE *)(alpha_dt + (j*d_mu + kkk)*S + i) + ii*SIMD_WIDTH);
             temp = _MM_ADD(temp, _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp))));
           }
-          _MM_STORE((TYPE *)(v_tmp + i) + ii*SIMD_WIDTH, temp);
+          _MM_STORE((VAL_TYPE *)(v_tmp + i) + ii*SIMD_WIDTH, temp);
         }
       }
 
@@ -479,16 +479,16 @@ MPI_TIMED_SECTION_BEGIN();
         for (cfft_size_t ii = 0; ii < 2; ii++) {
           SIMDFPTYPE xl = _MM_LOAD(d->w_dup + i*B*n_mu + theta*(CACHE_LINE_LEN/2) + ii*2);
           SIMDFPTYPE xh = _MM_LOAD(d->w_dup + i*B*n_mu + theta*(CACHE_LINE_LEN/2) + ii*2 + 1);
-          SIMDFPTYPE ytemp = _MM_LOAD((TYPE *)(d->alpha_ghost + j*d_mu*S + i) + ii*SIMD_WIDTH);
+          SIMDFPTYPE ytemp = _MM_LOAD((VAL_TYPE *)(d->alpha_ghost + j*d_mu*S + i) + ii*SIMD_WIDTH);
           SIMDFPTYPE temp = _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp)));
 
           for (cfft_size_t kkk=1; kkk<B; kkk++) {
             xl = _MM_LOAD(d->w_dup + i*B*n_mu + (kkk*n_mu + theta)*(CACHE_LINE_LEN/2) + ii*2);
             xh = _MM_LOAD(d->w_dup + i*B*n_mu + (kkk*n_mu + theta)*(CACHE_LINE_LEN/2) + ii*2 + 1);
-            ytemp = _MM_LOAD((TYPE *)(d->alpha_ghost + (j*d_mu + kkk)*S + i) + ii*SIMD_WIDTH);
+            ytemp = _MM_LOAD((VAL_TYPE *)(d->alpha_ghost + (j*d_mu + kkk)*S + i) + ii*SIMD_WIDTH);
             temp = _MM_ADD(temp, _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp))));
           }
-          _MM_STORE((TYPE *)(v_tmp + i) + ii*SIMD_WIDTH, temp);
+          _MM_STORE((VAL_TYPE *)(v_tmp + i) + ii*SIMD_WIDTH, temp);
         }
       }
 
@@ -616,8 +616,8 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
   for (cfft_size_t i = i_begin; i < i_end; i += CACHE_LINE_LEN/2) {
     input_buffer_ptr = 0;
     for (cfft_size_t k = 0; k < B - d_mu; k++) {
-      input_buffer[2*k] = _MM_LOAD((TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i));
-      input_buffer[2*k + 1] = _MM_LOAD((TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i) + SIMD_WIDTH);
+      input_buffer[2*k] = _MM_LOAD((VAL_TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i));
+      input_buffer[2*k + 1] = _MM_LOAD((VAL_TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i) + SIMD_WIDTH);
     }
 
     /*if (0 == d->PID && 0 == threadid) {
@@ -635,9 +635,9 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 
 #define LOAD_INPUT_TO_BUFFER(z, k, dummy) \
       input_buffer[(input_buffer_ptr + B - d_mu + k)%input_buffer_len*2] = \
-        _MM_LOAD((TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i)); \
+        _MM_LOAD((VAL_TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i)); \
       input_buffer[(input_buffer_ptr + B - d_mu + k)%input_buffer_len*2 + 1] = \
-        _MM_LOAD((TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i) + SIMD_WIDTH);
+        _MM_LOAD((VAL_TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i) + SIMD_WIDTH);
       //_MM_PREFETCH1(alpha_dt + (j*d_mu + B + k)*S + i);
 
       BOOST_PP_REPEAT(D_MU_TIMES_J_UNROLL_FACTOR, LOAD_INPUT_TO_BUFFER, dummy)
@@ -706,10 +706,10 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 
 #define STORE_TEMP_J_THETA(z, theta_arg, j_arg) \
       _MM_STREAM( \
-        (TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)), \
+        (VAL_TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)), \
         temp##j_arg##theta_arg##0); \
       _MM_STREAM( \
-        (TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)) + SIMD_WIDTH, \
+        (VAL_TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)) + SIMD_WIDTH, \
         temp##j_arg##theta_arg##1);
 #define STORE_TEMP_J(z, j_arg, dummy) BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, STORE_TEMP_J_THETA, j_arg)
       BOOST_PP_REPEAT(J_UNROLL_FACTOR, STORE_TEMP_J, dummy);
@@ -845,11 +845,11 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
       for (cfft_size_t i = 0; i < S; i += CACHE_LINE_LEN/2) {
         for (cfft_size_t ii = 0; ii < 2; ii++) {
           SIMDFPTYPE *in = d->w_dup + i*B*n_mu + theta*(CACHE_LINE_LEN/2) + ii*2;
-          //TYPE *in_end = d->w_dup + ((i + SIMD_WIDTH/2)*B*n_mu + theta*(CACHE_LINE_LEN/2))*SIMD_WIDTH;
+          //VAL_TYPE *in_end = d->w_dup + ((i + SIMD_WIDTH/2)*B*n_mu + theta*(CACHE_LINE_LEN/2))*SIMD_WIDTH;
 
           SIMDFPTYPE xl = _MM_LOAD(in);
           SIMDFPTYPE xh = _MM_LOAD(in + 1);
-          SIMDFPTYPE ytemp = _MM_LOAD((TYPE *)(alpha_dt + j*d_mu*S + i) + ii*SIMD_WIDTH);
+          SIMDFPTYPE ytemp = _MM_LOAD((VAL_TYPE *)(alpha_dt + j*d_mu*S + i) + ii*SIMD_WIDTH);
           SIMDFPTYPE temp = _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp)));
 
           in += n_mu*(CACHE_LINE_LEN/2);
@@ -857,10 +857,10 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
           for (cfft_size_t kkk = 1; kkk < B; kkk++, in += n_mu*(CACHE_LINE_LEN/2)) {
             xl = _MM_LOAD(in);
             xh = _MM_LOAD(in + 1);
-            ytemp = _MM_LOAD((TYPE *)(alpha_dt + (j*d_mu + kkk)*S + i) + ii*SIMD_WIDTH);
+            ytemp = _MM_LOAD((VAL_TYPE *)(alpha_dt + (j*d_mu + kkk)*S + i) + ii*SIMD_WIDTH);
             temp = _MM_ADD(temp, _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp))));
           }
-          _MM_STORE((TYPE *)(v_tmp + i) + ii*SIMD_WIDTH, temp);
+          _MM_STORE((VAL_TYPE *)(v_tmp + i) + ii*SIMD_WIDTH, temp);
         }
       }
 
@@ -938,16 +938,16 @@ MPI_TIMED_SECTION_BEGIN();
         for (cfft_size_t ii = 0; ii < 2; ii++) {
           SIMDFPTYPE xl = _MM_LOAD(d->w_dup + i*B*n_mu + theta*(CACHE_LINE_LEN/2) + ii*2);
           SIMDFPTYPE xh = _MM_LOAD(d->w_dup + i*B*n_mu + theta*(CACHE_LINE_LEN/2) + ii*2 + 1);
-          SIMDFPTYPE ytemp = _MM_LOAD((TYPE *)(d->alpha_ghost + j*d_mu*S + i) + ii*SIMD_WIDTH);
+          SIMDFPTYPE ytemp = _MM_LOAD((VAL_TYPE *)(d->alpha_ghost + j*d_mu*S + i) + ii*SIMD_WIDTH);
           SIMDFPTYPE temp = _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp)));
 
           for (cfft_size_t kkk=1; kkk<B; kkk++) {
             xl = _MM_LOAD(d->w_dup + i*B*n_mu + (kkk*n_mu + theta)*(CACHE_LINE_LEN/2) + ii*2);
             xh = _MM_LOAD(d->w_dup + i*B*n_mu + (kkk*n_mu + theta)*(CACHE_LINE_LEN/2) + ii*2 + 1);
-            ytemp = _MM_LOAD((TYPE *)(d->alpha_ghost + (j*d_mu + kkk)*S + i) + ii*SIMD_WIDTH);
+            ytemp = _MM_LOAD((VAL_TYPE *)(d->alpha_ghost + (j*d_mu + kkk)*S + i) + ii*SIMD_WIDTH);
             temp = _MM_ADD(temp, _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp))));
           }
-          _MM_STORE((TYPE *)(v_tmp + i) + ii*SIMD_WIDTH, temp);
+          _MM_STORE((VAL_TYPE *)(v_tmp + i) + ii*SIMD_WIDTH, temp);
         }
       }
 

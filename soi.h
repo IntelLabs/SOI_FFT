@@ -1,3 +1,6 @@
+#ifndef _SOI_FFT_SOI_H_
+#define _SOI_FFT_SOI_H_
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -17,45 +20,17 @@
 #include <fftw3-mpi.h>
 #endif
 
+#include "intrinsic.h"
+
 #define MEASURE_LOAD_IMBALANCE
 #define INTRINSIC
 //#define USE_ALL_TO_ALL_SYNC
 //#define USE_ALL_TO_ALL_ASYNC
 
-#ifndef PRECISION
-#define PRECISION 2
-#endif
-
 #if PRECISION == 2
-#define TYPE double
+#define VAL_TYPE double
 #define DFTI_TYPE DFTI_DOUBLE
 #define MPI_TYPE MPI_DOUBLE
-
-#define SIMD_WIDTH 4
-#define CACHE_LINE_LEN 8
-#define SIMDFPTYPE __m256d
-
-#define _MM_LOAD(a) _mm256_load_pd((TYPE *)(a))
-#define _MM_LOADU _mm256_loadu_pd
-
-#define _MM_STORE(a, v) _mm256_store_pd((TYPE *)(a), v)
-#define _MM_STOREU(a, v) _mm256_storeu_pd((TYPE *)(a), v)
-#define _MM_MASKSTORE _mm256_maskstore_pd
-#define _MM_STREAM(a, v) _mm256_stream_pd((TYPE *)(a), v)
-#define _MM_PREFETCH1(a) _mm_prefetch((char *)(a), _MM_HINT_T0)
-
-#define _MM_ADD _mm256_add_pd
-#define _MM_MUL _mm256_mul_pd
-#define _MM_ADDSUB _mm256_addsub_pd
-#ifdef __AVX2__
-#define _MM_FMADDSUB _mm256_fmaddsub_pd
-#else
-#define _MM_FMADDSUB(a, b, c) _MM_ADDSUB(_MM_MUL(a, b), c)
-#endif
-
-#define _MM_SWAP_REAL_IMAG(a) _mm256_permute_pd(a, 0x05)
-#define _MM_MOVELDUP _mm256_movedup_pd
-#define _MM_MOVEHDUP(a) _mm256_permute_pd(a, 0xf)
 
 #ifdef USE_FFTW
 #define FFTW_COMPLEX fftw_complex
@@ -77,29 +52,11 @@
 #endif
 
 #else
+// PRECISION == 1
 
-#define TYPE float
+#define VAL_TYPE float
 #define DFTI_TYPE DFTI_SINGLE
 #define MPI_TYPE MPI_FLOAT
-
-#define SIMD_WIDTH 8
-#define SIMDFPTYPE __m256
-
-#define _MM_LOAD _mm256_load_ps
-#define _MM_LOADU _mm256_loadu_ps
-
-#define _MM_STORE _mm256_store_ps
-#define _MM_STOREU _mm256_storeu_ps
-#define _MM_MASKSTORE _mm256_maskstore_ps
-#define _MM_STREAM _mm256_stream_ps
-
-#define _MM_ADD _mm256_add_ps
-#define _MM_MUL _mm256_mul_ps
-#define _MM_ADDSUB _mm256_addsub_ps
-
-#define _MM_SWAP_REAL_IMAG(a) _mm256_permute_ps(a, 0xb1)
-#define _MM_MOVELDUP _mm256_moveldup_ps
-#define _MM_MOVEHDUP _mm256_movehdup_ps
 
 #ifdef USE_FFTW
 #define FFTW_COMPLEX fftwf_complex
@@ -120,7 +77,9 @@
 #define FFTW_MPI_CLEANUP fftwf_mpi_cleanup
 #endif
 
-#endif
+#endif // PRECISION == 1
+
+#define CACHE_LINE_LEN (64/sizeof(VAL_TYPE))
 
 #define TRANSPOSE(row0, row1, row2, row3) \
 __m256d __t0, __t1, __t2, __t3; \
@@ -258,11 +217,11 @@ extern "C" {
 typedef size_t cfft_size_t;
 
 typedef struct _complex_struct_t {
-	TYPE re;
-	TYPE im;
+	VAL_TYPE re;
+	VAL_TYPE im;
 } complex_struct_t;
 
-typedef TYPE complex cfft_complex_t;
+typedef VAL_TYPE complex cfft_complex_t;
 #define COMPLEX_PTR(x) ((cfft_complex_t *)(x))
 #define MEMCPY_COMPLEX(x,y,n)                       \
 do {                                                \
@@ -317,28 +276,6 @@ typedef struct
     // segmentBoundaries[i]: the first segment ith rank will process
   double comm_to_comp_cost_ratio;
 } soi_desc_t;
-
-void vmul(cfft_complex_t * restrict r, cfft_complex_t * restrict x, cfft_complex_t * restrict y, cfft_size_t n);
-void vmul_soa(TYPE * restrict r_real, TYPE * restrict r_imag, TYPE * restrict x_real, TYPE * restrict x_imag, TYPE * restrict y_real, TYPE * restrict y_imag, cfft_size_t n);
-
-#define VADDMUL(r,x,y,n)               \
-do {                                   \
-	cfft_size_t __i;                   \
-	cfft_complex_t *__r,  *__x, *__y;  \
-	__r = COMPLEX_PTR(r);              \
-	__x = COMPLEX_PTR(x);              \
-	__y = COMPLEX_PTR(y);              \
-	for (__i=0; __i<(n); __i+=1)       \
-		__r[__i] += __x[__i]*__y[__i]; \
-} while(0)
-
-void vaddmul(cfft_complex_t * r, cfft_complex_t * x, cfft_complex_t * y, cfft_size_t n);
-void vaddmul_soa(TYPE * restrict r_real, TYPE * restrict r_imag, TYPE * restrict x_real, TYPE * restrict x_imag, TYPE * restrict y_real, TYPE * restrict y_imag, cfft_size_t n);
-
-cfft_complex_t cdot(cfft_complex_t * x, cfft_size_t x_step, cfft_complex_t * y, cfft_size_t y_step, cfft_size_t n);
-
-void permute(soi_desc_t * d, cfft_complex_t * outp, cfft_complex_t * inp, 
-			 cfft_size_t k, cfft_size_t p, cfft_size_t m_hat);
 
 __declspec(noinline)
 void parallel_filter_subsampling(soi_desc_t * d, cfft_complex_t * alpha_dt);
@@ -414,3 +351,5 @@ extern unsigned long long load_imbalance_times[MAX_THREADS];
 #endif
 
 #endif
+
+#endif // _SOI_FFT_SOI_H_

@@ -401,7 +401,7 @@ double compute_normalized_inf_norm(
   for (size_t idx = 0; idx < localLen; idx++) {
     cfft_complex_t ref = reference_output(idx + offset, globalLen, kind, offset);
     cfft_complex_t diff = output[idx] - ref;
-    TYPE diff_mag = creal(diff)*creal(diff) + cimag(diff)*cimag(diff);
+    VAL_TYPE diff_mag = creal(diff)*creal(diff) + cimag(diff)*cimag(diff);
     if (diff_mag > maxErr) {
       maxErrIdx = idx;
       maxErr = diff_mag;

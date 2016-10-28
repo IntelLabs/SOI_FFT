@@ -201,15 +201,11 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
 	d->B = B;
 	M_hat = d->M_hat = ((d->n_mu)*(d->M))/(d->d_mu);
 	mu = d->mu = (double)(d->n_mu)/(d->d_mu);
-	d->w = (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*B*(d->S)*n_mu, 4096);
-  d->w_dup = (SIMDFPTYPE *)_mm_malloc(sizeof(SIMDFPTYPE)*B*(d->S)*n_mu, 4096);
-	d->W_inv = (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*(d->M), 4096);
+  posix_memalign((void **)&d->w, 4096, sizeof(cfft_complex_t)*B*(d->S)*n_mu);
+  posix_memalign((void **)&d->w_dup, 4096, sizeof(SIMDFPTYPE)*B*(d->S)*n_mu);
+  posix_memalign((void **)&d->W_inv, 4096, sizeof(cfft_complex_t)*(d->M));
   if (NULL == g_gamma_tilde) {
-#ifdef USE_LARGE_PAGE
-	  g_gamma_tilde = (cfft_complex_t *)large_malloc(sizeof(cfft_complex_t)*(d->M_hat)*k*2, PID); // FIXME
-#else
-	  g_gamma_tilde = (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*(d->M_hat)*k*2, 4096);
-#endif
+    posix_memalign((void **)&g_gamma_tilde, 4096, sizeof(cfft_complex_t)*(d->M_hat)*k*2);
   }
 	d->gamma_tilde = g_gamma_tilde;
   if (NULL == d->gamma_tilde) {
@@ -218,11 +214,7 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
   }
 
   if (NULL == g_alpha_tilde) {
-#ifdef USE_LARGE_PAGE
-	  g_alpha_tilde = (cfft_complex_t *)large_malloc(sizeof(cfft_complex_t)*(d->M_hat)*k, PID);
-#else
-	  g_alpha_tilde = (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*(d->M_hat)*k, 4096);
-#endif
+    posix_memalign((void **)&g_alpha_tilde, 4096, sizeof(cfft_complex_t)*(d->M_hat)*k);
   }
 	d->alpha_tilde = g_alpha_tilde;
   if (NULL == d->alpha_tilde) {
@@ -231,11 +223,7 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
   }
 
   if (NULL == g_beta_tilde) {
-#ifdef USE_LARGE_PAGE
-	  g_beta_tilde = (cfft_complex_t *)large_malloc(sizeof(cfft_complex_t)*(d->M_hat)*k, PID);
-#else
-	  g_beta_tilde = (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*(d->M_hat)*k, 4096);
-#endif
+    posix_memalign((void **)&g_beta_tilde, 4096, sizeof(cfft_complex_t)*(d->M_hat)*k);
   }
   d->beta_tilde = g_beta_tilde;
   if (NULL == d->beta_tilde) {
@@ -244,12 +232,12 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
   }
 
   //d->alpha_ghost = (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*d->M*d->S, 4096);
-  d->alpha_ghost = (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*2*B*d->S, 4096);
+  posix_memalign((void **)&d->alpha_ghost, 4096, sizeof(cfft_complex_t)*2*B*d->S);
   if (NULL == d->alpha_ghost) {
     fprintf(stderr, "Failed to allocate d->alpha_ghost\n");
     exit(1);
   }
-  d->delta = (int *)_mm_malloc(sizeof(int)*4*d->M_hat*k, 4096);
+  posix_memalign((void **)&d->delta, 4096, sizeof(int)*4*d->M_hat*k);
   d->epsilon = NULL;
 
 	d->w_f = w_f;
@@ -267,7 +255,7 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
 
       for (cfft_size_t j = 0; j < d->B; j++) {
         for (cfft_size_t ii = 0; ii < 2; ii++) {
-          SIMDFPTYPE temp = _MM_LOADU((TYPE *)(d->w + i*d->B*d->n_mu + (j*d->n_mu + theta)*(CACHE_LINE_LEN/2)) + ii*SIMD_WIDTH);
+          SIMDFPTYPE temp = _MM_LOADU((VAL_TYPE *)(d->w + i*d->B*d->n_mu + (j*d->n_mu + theta)*(CACHE_LINE_LEN/2)) + ii*SIMD_WIDTH);
           _MM_STOREU(d->w_dup + i*d->B*d->n_mu + (j*d->n_mu + theta)*(CACHE_LINE_LEN/2) + 2*ii, _MM_MOVELDUP(temp));
           _MM_STOREU(d->w_dup + i*d->B*d->n_mu + (j*d->n_mu + theta)*(CACHE_LINE_LEN/2) + 2*ii + 1, _MM_MOVEHDUP(temp));
         }
@@ -278,7 +266,7 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
 				(d->w)[theta*(d->B)*(d->S) + i*(d->S) + j] = (d->w_f)(theta*(d->B)*(d->S) + i*(d->S) + j, d->N);
 
       for (cfft_size_t j = 0; j < d->S/(SIMD_WIDTH/2)*(SIMD_WIDTH/2); j += SIMD_WIDTH/2) {
-        SIMDFPTYPE temp = _MM_LOADU((TYPE *)(d->w + theta*d->B*d->S + i*d->S + j));
+        SIMDFPTYPE temp = _MM_LOADU((VAL_TYPE *)(d->w + theta*d->B*d->S + i*d->S + j));
         _MM_STOREU(d->w_dup + (theta*(d->B)*(d->S) + i*(d->S) + j)*SIMD_WIDTH, _MM_MOVELDUP(temp));
         _MM_STOREU(d->w_dup + (theta*(d->B)*(d->S) + i*(d->S) + j + 1)*SIMD_WIDTH, _MM_MOVEHDUP(temp));
       }
@@ -342,14 +330,14 @@ void free_soi_descriptor(soi_desc_t * d)
   free(d->recvRequests); d->recvRequests = NULL;
 
 	// free window functions tables
-	if (d->w) _mm_free(d->w);
-	if (d->w_dup) _mm_free(d->w_dup);
-	if (d->W_inv) _mm_free(d->W_inv);
-	//_mm_free(d->alpha_tilde);
-	if (d->alpha_ghost) _mm_free(d->alpha_ghost);
-  //if (d->gamma_tilde) _mm_free(d->gamma_tilde); d->gamma_tilde = NULL;
+	if (d->w) free(d->w);
+	if (d->w_dup) free(d->w_dup);
+	if (d->W_inv) free(d->W_inv);
+	//free(d->alpha_tilde);
+	if (d->alpha_ghost) free(d->alpha_ghost);
+  //if (d->gamma_tilde) free(d->gamma_tilde); d->gamma_tilde = NULL;
   if (d->use_vlc) {
-    if (d->epsilon) _mm_free(d->epsilon); d->epsilon = NULL;
+    if (d->epsilon) free(d->epsilon); d->epsilon = NULL;
   }
   if (d->segmentBoundaries) free(d->segmentBoundaries); d->segmentBoundaries = NULL;
 
@@ -360,7 +348,6 @@ void free_soi_descriptor(soi_desc_t * d)
 unsigned long long load_imbalance_times[MAX_THREADS];
 #endif
 
-double soiBeginTime;
 double time_begin_mpi, time_end_mpi;
 double time_begin_fused[1024], time_end_fused[1024];
 
@@ -368,7 +355,7 @@ void mpiWriteFileSequentially(char *fileName, cfft_complex_t *buffer, size_t len
 
 void compute_soi(soi_desc_t * d, cfft_complex_t *alpha_dt)
 {
-  soiBeginTime = MPI_Wtime();
+  double soiBeginTime = MPI_Wtime();
 
 	cfft_size_t l = (d->M_hat)/(d->P);
 
@@ -539,16 +526,15 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
   int numOfSegToReceive =
     d->segmentBoundaries[d->PID + 1] - d->segmentBoundaries[d->PID];
 
-  /*if (g_gamma_tilde) _mm_free(g_gamma_tilde);
+  /*if (g_gamma_tilde) free(g_gamma_tilde);
   g_gamma_tilde = (cfft_complex_t *)_mm_malloc(
     sizeof(cfft_complex_t)*d->M_hat*numOfSegToReceive,
     4096);
   d->gamma_tilde = g_gamma_tilde;*/
 
   if (d->use_vlc) {
-    if (d->epsilon) _mm_free(d->epsilon);
-    d->epsilon = (int *)_mm_malloc(
-      sizeof(int)*4*d->M_hat*numOfSegToReceive, 4096);
+    if (d->epsilon) free(d->epsilon);
+    posix_memalign((void **)&d->epsilon, 4096, sizeof(int)*4*d->M_hat*numOfSegToReceive);
   }
 
   long compressedLen = 0;
@@ -748,12 +734,12 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
     {
 #pragma omp for
     for (cfft_size_t i = 0; i < d->M/(SIMD_WIDTH/2)*(SIMD_WIDTH/2); i += SIMD_WIDTH/2) {
-      SIMDFPTYPE xtemp = _MM_LOAD((TYPE *)(d->W_inv + i));
+      SIMDFPTYPE xtemp = _MM_LOAD((VAL_TYPE *)(d->W_inv + i));
       SIMDFPTYPE xl = _MM_MOVELDUP(xtemp);
       SIMDFPTYPE xh = _MM_MOVEHDUP(xtemp);
-      SIMDFPTYPE ytemp = _MM_LOAD((TYPE *)(d->gamma_tilde + ik*d->M_hat + i));
+      SIMDFPTYPE ytemp = _MM_LOAD((VAL_TYPE *)(d->gamma_tilde + ik*d->M_hat + i));
       SIMDFPTYPE temp = _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp)));
-      _MM_STREAM((TYPE *)(alpha_dt + ik*(d->M) + i), temp);
+      _MM_STREAM((VAL_TYPE *)(alpha_dt + ik*(d->M) + i), temp);
     }
 
 #ifdef MEASURE_LOAD_IMBALANCE
@@ -765,13 +751,13 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
     cfft_size_t i = d->M/(SIMD_WIDTH/2)*(SIMD_WIDTH/2);
 
     if (i < d->M) {
-      SIMDFPTYPE xtemp = _MM_LOADU((TYPE *)(d->W_inv + i));
+      SIMDFPTYPE xtemp = _MM_LOADU((VAL_TYPE *)(d->W_inv + i));
       SIMDFPTYPE xl = _MM_MOVELDUP(xtemp);
       SIMDFPTYPE xh = _MM_MOVEHDUP(xtemp);
-      SIMDFPTYPE ytemp = _MM_LOADU((TYPE *)(d->gamma_tilde + ik*d->M_hat + i));
+      SIMDFPTYPE ytemp = _MM_LOADU((VAL_TYPE *)(d->gamma_tilde + ik*d->M_hat + i));
       __m256i mask = _mm256_load_si256((__m256i *)Remaining[d->M - i]);
       SIMDFPTYPE temp = _MM_FMADDSUB(xl, ytemp, _MM_SWAP_REAL_IMAG(_MM_MUL(xh, ytemp)));
-      _MM_MASKSTORE((TYPE *)(alpha_dt + ik*(d->M) + i), mask, temp);
+      _MM_MASKSTORE((VAL_TYPE *)(alpha_dt + ik*(d->M) + i), mask, temp);
     }
 #else
 #pragma omp parallel

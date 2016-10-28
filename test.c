@@ -17,9 +17,19 @@ extern double tau;
 extern double sigma;
 extern cfft_size_t B;
 
+/**
+ * Computes ith element of window function for length-n FFT
+ */
 cfft_complex_t w_f(cfft_size_t i, cfft_size_t n);
+
+/**
+ * Computes ith element of inverse window function for length-n FFT
+ */
 cfft_complex_t W_inv_f(cfft_size_t i, cfft_size_t n);
 
+/**
+ * Command line options
+ */
 typedef struct options {
   int k_min, k_max;
   int input_min, input_max;
@@ -130,10 +140,6 @@ static options parseArgs(int argc, char *argv[])
     }
   }
   N = (powIdx == -1) ? atol(argv[optind]) : pow(atol(argv[optind]), atol(argv[optind] + powIdx + 1));
-  //if (ret.input_min == 5 && ret.input_max == 5) {
-    //// uhpc sar input
-    //N = 64000;
-  //}
   
   int P, PID;
   MPI_Comm_size(MPI_COMM_WORLD, &P);
@@ -179,7 +185,10 @@ static void initMPI(int argc, char *argv[], int *P, int *PID)
   }
 }
 
-void mpiWriteFileSequentially(char *fileName, cfft_complex_t *buffer, size_t len)
+/**
+ * Each MPI rank sequentially writes its own buffer to a single file.
+ */
+static void mpiWriteFileSequentially(char *fileName, cfft_complex_t *buffer, size_t len)
 {
   int P, PID;
   int ret, errLen;
@@ -206,14 +215,12 @@ void mpiWriteFileSequentially(char *fileName, cfft_complex_t *buffer, size_t len
         for (int i = 0; i < len; ++i) {
           fprintf(fp, "%g %g\n", __real__(buffer[i]), __imag__(buffer[i]));
         }
-        //fwrite(buffer, sizeof(cfft_complex_t), len, fp);
         fclose(fp);
       }
     }
   }
 }
 
-extern double soiBeginTime;
 extern double time_begin_mpi, time_end_mpi;
 extern double time_begin_fused[1024], time_end_fused[1024];
 
@@ -246,11 +253,7 @@ int main(int argc, char *argv[])
         DftiCreateDescriptor(&desc, DFTI_TYPE, DFTI_COMPLEX, 1, N);
         DftiCommitDescriptor(desc);
         if (in_buf == NULL) {
-#ifdef USE_LARGE_PAGE
-          in_buf = (cfft_complex_t *)large_malloc(sizeof(cfft_complex_t)*N*n_mu/d_mu, PID);
-#else
-          in_buf = (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*N*n_mu/d_mu, 4096);
-#endif
+          posix_memalign((void **)&in_buf, 4096, sizeof(cfft_complex_t)*N*n_mu/d_mu);
         }
         populate_input(in_buf, N, 0, N, input);
 
@@ -280,7 +283,7 @@ int main(int argc, char *argv[])
           in_buf = (cfft_complex_t *)large_malloc(sizeof(cfft_complex_t)*size*n_mu/d_mu, PID);
 #else
           size_t in_buf_size = sizeof(cfft_complex_t)*size*n_mu/d_mu*2;
-          in_buf = (cfft_complex_t *)_mm_malloc(in_buf_size, 4096); // FIXME
+          posix_memalign((void **)&in_buf, 4096, in_buf_size);
           if (NULL == in_buf) {
             fprintf(stderr, "Failed to allocate in_buf (in_buf_size requested = %ld)\n", in_buf_size);
           }
@@ -418,11 +421,7 @@ int main(int argc, char *argv[])
         d->comm_to_comp_cost_ratio = options.comm_to_comp_cost_ratio;
 
         if (in_buf == NULL) {
-#ifdef USE_LARGE_PAGE
-          in_buf = (cfft_complex_t *)large_malloc(sizeof(cfft_complex_t)*d->M_hat*d->k, PID);
-#else
-          in_buf = (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*d->M_hat*d->k, 4096);
-#endif
+          posix_memalign((void **)&in_buf, 4096, sizeof(cfft_complex_t)*d->M_hat*d->k);
         }
 
         populate_input(in_buf, N/P, PID*N/P, N, input);
@@ -443,15 +442,15 @@ int main(int argc, char *argv[])
           printf("flops_soi_%d\t%f\n", k, gflops);
         }
 
-        _mm_free(d->w); d->w = NULL;
-        _mm_free(d->w_dup); d->w_dup = NULL;
-        _mm_free(d->W_inv); d->W_inv = NULL;
-        _mm_free(d->alpha_ghost); d->alpha_ghost = NULL;
-        //_mm_free(d->alpha_tilde); d->alpha_tilde = NULL;
-        //_mm_free(d->gamma_tilde); d->gamma_tilde = NULL;
-        //_mm_free(d->beta_tilde); d->beta_tilde = NULL; // if we free these, iterating over m won't work
+        free(d->w); d->w = NULL;
+        free(d->w_dup); d->w_dup = NULL;
+        free(d->W_inv); d->W_inv = NULL;
+        free(d->alpha_ghost); d->alpha_ghost = NULL;
+        //free(d->alpha_tilde); d->alpha_tilde = NULL;
+        //free(d->gamma_tilde); d->gamma_tilde = NULL;
+        //free(d->beta_tilde); d->beta_tilde = NULL; // if we free these, iterating over m won't work
         if (d->use_vlc && d->epsilon) {
-          _mm_free(d->epsilon); d->epsilon = NULL;
+          free(d->epsilon); d->epsilon = NULL;
         }
 
         if (!options.no_snr) {
@@ -474,6 +473,7 @@ int main(int argc, char *argv[])
           }
         }
 
+#ifdef SOI_FFT_PRINT_MPI_TIMES
         int numOfSegToReceive =
           d->segmentBoundaries[d->PID + 1] - d->segmentBoundaries[d->PID];
 
@@ -489,6 +489,7 @@ int main(int argc, char *argv[])
             fclose(fp);
           }
         } // for each rank
+#endif
 
         free_soi_descriptor(d);
 

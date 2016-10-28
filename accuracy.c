@@ -186,20 +186,20 @@ int main(int argc, char *argv[])
   FFTW_PLAN fftwPlan;
 #endif
 
-  cfft_complex_t *mklBuf =
-    (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*N/P*n_mu/d_mu, 4096);
+  cfft_complex_t *mklBuf = NULL;
+  posix_memalign((void **)&mklBuf, 4096, sizeof(cfft_complex_t)*N/P*n_mu/d_mu);
   if (NULL == mklBuf) {
     fprintf(stderr, "Failed to allocate mklBuf\n");
     return -1;
   }
-  cfft_complex_t *fftwBuf =
-    (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*N/P*n_mu/d_mu, 4096);
+  cfft_complex_t *fftwBuf = NULL;
+  posix_memalign((void **)&fftwBuf, 4096, sizeof(cfft_complex_t)*N/P*n_mu/d_mu);
   if (NULL == fftwBuf) {
     fprintf(stderr, "Failed to allocate fftwBuf\n");
     return -1;
   }
-  cfft_complex_t *soiBuf =
-    (cfft_complex_t *)_mm_malloc(sizeof(cfft_complex_t)*N/P*n_mu/d_mu, 4096);
+  cfft_complex_t *soiBuf = NULL;
+  posix_memalign((void **)&soiBuf, 4096, sizeof(cfft_complex_t)*N/P*n_mu/d_mu);
   if (NULL == soiBuf) {
     fprintf(stderr, "Failed to allocate soiBuf\n");
     return -1;
