@@ -8,24 +8,7 @@
 #include "soi.h"
 #include "mkl_cdft.h"
 
-cfft_size_t N;
 cfft_size_t kmin, kmax;
-cfft_size_t n_mu = 5;
-cfft_size_t d_mu = 4;
-
-extern double tau;
-extern double sigma;
-extern cfft_size_t B;
-
-/**
- * Computes ith element of window function for length-n FFT
- */
-cfft_complex_t w_f(cfft_size_t i, cfft_size_t n);
-
-/**
- * Computes ith element of inverse window function for length-n FFT
- */
-cfft_complex_t W_inv_f(cfft_size_t i, cfft_size_t n);
 
 /**
  * Command line options
@@ -47,7 +30,7 @@ typedef struct options {
   double comm_to_comp_cost_ratio;
 } options;
 
-static options parseArgs(int argc, char *argv[])
+static options parseArgs(int argc, char *argv[], soi_desc_t *desc)
 {
   options ret;
   ret.k_min = ret.k_max = 8;
@@ -69,15 +52,16 @@ static options parseArgs(int argc, char *argv[])
   while (1) {
     static struct option long_options[] = {
       { "k_min", required_argument, 0, 'k' },
-      { "k_max", required_argument, 0, 'K' },
+      { "k_max", required_argument, 0, 'K' }, // sweep k over [k_min, k_max)
       { "input_min", required_argument, 0, 'i' },
-      { "input_max", required_argument, 0, 'I' },
+      { "input_max", required_argument, 0, 'I' }, // sweep input kind over [input_min, input_max)
       { "no_mkl", no_argument, 0, 'o' },
       { "no_soi", no_argument, 0, 'O' },
-      { "no_snr", no_argument, 0, 'c' },
+      { "no_snr", no_argument, 0, 'c' }, // don't compute SNR
       { "n_mu", required_argument, 0, 'n' },
-      { "d_mu", required_argument, 0, 'd' },
+      { "d_mu", required_argument, 0, 'd' }, // over sampling factor = n_mu/d_mu . input size should be a multiple of d_mu
       { "tau", required_argument, 0, 'a' },
+        // a parameter that controls the width of window function. The wider the width, the smaller truncation error becomes
       { "sigma", required_argument, 0, 'g' },
       { "B", required_argument, 0, 'B' },
       { "in_file", required_argument, 0, 'x' },
@@ -106,11 +90,13 @@ static options parseArgs(int argc, char *argv[])
     case 'o': ret.no_mkl = 1; break;
     case 'O': ret.no_soi = 1; break;
     case 'c': ret.no_snr = 1; break;
-    case 'n': n_mu = atoi(optarg); break;
-    case 'd': d_mu = atoi(optarg); break;
-    case 'a': tau = atof(optarg)/1024; break;
-    case 'g': sigma = atof(optarg); break;
-    case 'B': B = atoi(optarg); break;
+
+    case 'n': desc->n_mu = atoi(optarg); break;
+    case 'd': desc->d_mu = atoi(optarg); break;
+    case 'a': desc->tau = atof(optarg)/1024; break;
+    case 'g': desc->sigma = atof(optarg); break;
+    case 'B': desc->B = atoi(optarg); break;
+
     case 'x': ret.in_file_name = optarg; break;
     case 'm': ret.mkl_out_file_name = optarg; break;
     case 's': ret.soi_out_file_name = optarg; break;
@@ -139,15 +125,15 @@ static options parseArgs(int argc, char *argv[])
       break;
     }
   }
-  N = (powIdx == -1) ? atol(argv[optind]) : pow(atol(argv[optind]), atol(argv[optind] + powIdx + 1));
+  desc->N = (powIdx == -1) ? atol(argv[optind]) : pow(atol(argv[optind]), atol(argv[optind] + powIdx + 1));
   
   int P, PID;
   MPI_Comm_size(MPI_COMM_WORLD, &P);
 	MPI_Comm_rank(MPI_COMM_WORLD, &PID);
 
-  if (N%(d_mu*ret.k_max*P*16) != 0) {
+  if (desc->N%(desc->d_mu*ret.k_max*P*16) != 0) {
     if (0 == PID) {
-      fprintf(stderr, "(d_mu=%d)*(P=%d)*(k=%d)*64 must divide N\n", d_mu, P, ret.k_max);
+      fprintf(stderr, "(d_mu=%d)*(P=%d)*(k=%d)*64 must divide N\n", desc->d_mu, P, ret.k_max);
     }
     exit(-1);
   }
@@ -226,7 +212,72 @@ extern double time_begin_fused[1024], time_end_fused[1024];
 
 int main(int argc, char *argv[])
 {
-	soi_desc_t * d;
+	soi_desc_t d;
+
+  // The default parameters
+  d.n_mu = 5;
+  d.d_mu = 4;
+  d.tau = 928/1024.; // divide with a power of 2 to be exact in binary representation
+  d.sigma = 373.7314;
+  d.B = 72;
+
+// The following parameters also can be used.
+// Pareto optimal points are marked with *.
+// Overall, given the same mu (oversampling factor), higher B gives higher
+// accuracy and we should also increase tau and sigma together
+// With higher mu, we can get a similar accuracy with smaller B. This basically
+// trade-offs more communication for less computation
+
+// mu    | tau      | sigma       | B  | SNR (dB)
+// 1.25  | 872/1024 | 313.1715    | 76 | 289.2718 *
+// 1.25  | 928/1024 | 373.7314    | 72 | 288.1844 *
+// 1.25  | 818/1024 | 267.4513    | 64 | 284.7614 *
+// 1.25  | 0.899    | 352.7647081 | 60 | 282 *
+// 1.25  | 764/1024 | 213.2893    | 60 | 275.246
+// 1.25  | 709/1024 | 201.8235    | 56 | 266.6957 *
+// 1.25  | 0.782    | 245.8927353 | 54 | 259 *
+// 1.25  | 652/1024 | 176.9743    | 54 | 258.2814
+// 1.25  | 591/1024 | 154.7071    | 50 | 247.7459
+// 1.25  | 512/1024 | 121.0936    | 44 | 241.8972 *
+// 1.25  | 0.664    | 182.5254421 | 46 | 239
+// 1.25  | 0.578    | 155.3322    | 44 | 233
+// 1.25  | 0.531    | 136.5983707 | 41 | 220 *
+// 1.25  | 383/1024 | 104.1262    | 42 | 219.777
+// 1.25  | 0.4476   | 119.2272    | 38 | 213 *
+// 1.25  | 299/1024 |  90.5391    | 38 | 210.1298
+// 1.25  | 0.373    | 102.1115361 | 36 | 200 *
+// 1.25  | 0.2927   |  90.7306    | 32 | 193 *
+// 1.25  | 0.154    |  73.2102363 | 30 | 179 *
+
+// 1.125 | 0.7238   | 476.8683    | 76 | 213 *
+// 1.125 | 0.6476   | 363.891     | 66 | 193 *
+
+// 1.5   | 931/1024 | 109.0712    | 36 | 289.6294 *
+// 1.5   | 832/1024 |  93.4329    | 38 | 289.4688
+// 1.5   | 0.0554   |  36.6513    | 22 | 235 *
+
+////////////////////////////////////////////////////////////////////////////////
+// with mu = 1.125
+
+// 193dB
+//static const double tau = 0.6476;
+//static const double sigma = 363.891;
+//cfft_size_t B = 66;
+
+// 213dB
+//static const double tau = 0.7238;
+//static const double sigma = 476.8683;
+//cfft_size_t B = 76;
+
+////////////////////////////////////////////////////////////////////////////////
+// with mu = 1.5
+
+// 235dB
+//static const double tau = 0.0554;
+//static const double sigma = 36.6513;
+//cfft_size_t B = 22;
+
+
 	cfft_size_t i;
 	cfft_complex_t *in_buf = NULL;
 	double time_mkl, time_soi, max_err, g_max_err;
@@ -235,41 +286,41 @@ int main(int argc, char *argv[])
 
   int P, PID;
   initMPI(argc, argv, &P, &PID);
-  options options = parseArgs(argc, argv);
+  options options = parseArgs(argc, argv, &d);
 
   if (0 == PID) {
     printf(
       "P = %d, N = %ld, n_mu = %ld, d_mu = %ld, B = %ld, sigma = %f\n",
-      P, N, n_mu, d_mu, B, sigma);
+      P, d.N, d.n_mu, d.d_mu, d.B, d.sigma);
   }
 
-  double flop = 5.*N*log2(N);
+  double flop = 5.*d.N*log2(d.N);
 
   for (int m = 0; m < 4; m++)
   for (int input = options.input_min; input <= options.input_max; input++) {
     if (!options.no_mkl) {
       if (1 == P) {
         DFTI_DESCRIPTOR_HANDLE desc;
-        DftiCreateDescriptor(&desc, DFTI_TYPE, DFTI_COMPLEX, 1, N);
+        DftiCreateDescriptor(&desc, DFTI_TYPE, DFTI_COMPLEX, 1, d.N);
         DftiCommitDescriptor(desc);
         if (in_buf == NULL) {
-          posix_memalign((void **)&in_buf, 4096, sizeof(cfft_complex_t)*N*n_mu/d_mu);
+          posix_memalign((void **)&in_buf, 4096, sizeof(cfft_complex_t)*d.N*d.n_mu/d.d_mu);
         }
-        populate_input(in_buf, N, 0, N, input);
+        populate_input(in_buf, d.N, 0, d.N, input);
 
         // Write input to file.
-        mpiWriteFileSequentially(options.in_file_name, in_buf, N/P);
+        mpiWriteFileSequentially(options.in_file_name, in_buf, d.N/P);
 
         time_mkl = -MPI_Wtime();
         DftiComputeForward(desc, in_buf);
         time_mkl += MPI_Wtime();
         MPI_DUMP_FLOAT(MPI_COMM_WORLD, time_mkl);
         DftiFreeDescriptor(&desc);
-        size = N;
+        size = d.N;
       }
       else {
         MKL_LONG status;
-        status = DftiCreateDescriptorDM(MPI_COMM_WORLD, &desc, DFTI_TYPE, DFTI_COMPLEX, 1, N);
+        status = DftiCreateDescriptorDM(MPI_COMM_WORLD, &desc, DFTI_TYPE, DFTI_COMPLEX, 1, d.N);
         if (status && !DftiErrorClass(status, DFTI_NO_ERROR))
           fprintf(stderr, "%s:%d %s\n", __FILE__, __LINE__, DftiErrorMessage(status));
         status = DftiGetValueDM(desc, CDFT_LOCAL_SIZE, &size);
@@ -282,7 +333,7 @@ int main(int argc, char *argv[])
 #ifdef USE_LARGE_PAGE
           in_buf = (cfft_complex_t *)large_malloc(sizeof(cfft_complex_t)*size*n_mu/d_mu, PID);
 #else
-          size_t in_buf_size = sizeof(cfft_complex_t)*size*n_mu/d_mu*2;
+          size_t in_buf_size = sizeof(cfft_complex_t)*size*d.n_mu/d.d_mu*2;
           posix_memalign((void **)&in_buf, 4096, in_buf_size);
           if (NULL == in_buf) {
             fprintf(stderr, "Failed to allocate in_buf (in_buf_size requested = %ld)\n", in_buf_size);
@@ -292,11 +343,11 @@ int main(int argc, char *argv[])
         status = DftiCommitDescriptorDM(desc);
         if (status && !DftiErrorClass(status, DFTI_NO_ERROR))
           fprintf(stderr, "%s\n", DftiErrorMessage(status));
-        populate_input(in_buf, N/P, PID*N/P, N, input);
+        populate_input(in_buf, d.N/P, PID*d.N/P, d.N, input);
 
         MPI_Barrier(MPI_COMM_WORLD);
         // Write input to file.
-        mpiWriteFileSequentially(options.in_file_name, in_buf, N/P);
+        mpiWriteFileSequentially(options.in_file_name, in_buf, d.N/P);
 
         MPI_Barrier(MPI_COMM_WORLD);
         time_mkl = -MPI_Wtime();
@@ -314,13 +365,13 @@ int main(int argc, char *argv[])
       }
 
       // Write output to file.
-      mpiWriteFileSequentially(options.mkl_out_file_name, in_buf, N/P);
+      mpiWriteFileSequentially(options.mkl_out_file_name, in_buf, d.N/P);
 
       if (!options.no_snr) {
         double mkl_snr = INFINITY, mkl_max_err = 0;
         if (input != 2 && input != 4 && input != 5) {
-          mkl_snr = compute_snr(in_buf, N/P, PID*N/P, N, input, NULL);
-          mkl_max_err = compute_normalized_inf_norm(in_buf, N/P, PID*N/P, N, input);
+          mkl_snr = compute_snr(in_buf, d.N/P, PID*d.N/P, d.N, input, NULL);
+          mkl_max_err = compute_normalized_inf_norm(in_buf, d.N/P, PID*d.N/P, d.N, input);
         }
         if (0 == PID) {
           printf("snr_mkl%d\t%f\n", input, mkl_snr);
@@ -414,20 +465,20 @@ int main(int argc, char *argv[])
     //////////////////////////////
     for (int soi_with_fftw = 0; soi_with_fftw <= options.soi_with_fftw; ++soi_with_fftw) {
       for (int k = options.k_min; k <= options.k_max && !options.no_soi; k *= 2) {
-        create_soi_descriptor(
-          &d, MPI_COMM_WORLD, N, k, n_mu, d_mu, w_f, W_inv_f, B,
+        init_soi_descriptor(
+          &d, MPI_COMM_WORLD, d.N, k, d.n_mu, d.d_mu, d.B,
           soi_with_fftw, options.fftw_flags);
-        d->use_vlc = options.use_vlc;
-        d->comm_to_comp_cost_ratio = options.comm_to_comp_cost_ratio;
+        d.use_vlc = options.use_vlc;
+        d.comm_to_comp_cost_ratio = options.comm_to_comp_cost_ratio;
 
         if (in_buf == NULL) {
-          posix_memalign((void **)&in_buf, 4096, sizeof(cfft_complex_t)*d->M_hat*d->k);
+          posix_memalign((void **)&in_buf, 4096, sizeof(cfft_complex_t)*d.M_hat*d.k);
         }
 
-        populate_input(in_buf, N/P, PID*N/P, N, input);
+        populate_input(in_buf, d.N/P, PID*d.N/P, d.N, input);
         MPI_Barrier(MPI_COMM_WORLD);
         time_soi = -MPI_Wtime();
-        compute_soi(d, in_buf);
+        compute_soi(&d, in_buf);
 
         MPI_Barrier(MPI_COMM_WORLD);
         time_soi += MPI_Wtime();
@@ -442,25 +493,25 @@ int main(int argc, char *argv[])
           printf("flops_soi_%d\t%f\n", k, gflops);
         }
 
-        free(d->w); d->w = NULL;
-        free(d->w_dup); d->w_dup = NULL;
-        free(d->W_inv); d->W_inv = NULL;
-        free(d->alpha_ghost); d->alpha_ghost = NULL;
-        //free(d->alpha_tilde); d->alpha_tilde = NULL;
-        //free(d->gamma_tilde); d->gamma_tilde = NULL;
-        //free(d->beta_tilde); d->beta_tilde = NULL; // if we free these, iterating over m won't work
-        if (d->use_vlc && d->epsilon) {
-          free(d->epsilon); d->epsilon = NULL;
+        free(d.w); d.w = NULL;
+        free(d.w_dup); d.w_dup = NULL;
+        free(d.W_inv); d.W_inv = NULL;
+        free(d.alpha_ghost); d.alpha_ghost = NULL;
+        //free(d.alpha_tilde); d.alpha_tilde = NULL;
+        //free(d.gamma_tilde); d.gamma_tilde = NULL;
+        //free(d.beta_tilde); d.beta_tilde = NULL; // if we free these, iterating over m won't work
+        if (d.use_vlc && d.epsilon) {
+          free(d.epsilon); d.epsilon = NULL;
         }
 
         if (!options.no_snr) {
-          int firstSegment = d->segmentBoundaries[d->PID];
-          int nSegments = d->segmentBoundaries[d->PID + 1] - firstSegment;
+          int firstSegment = d.segmentBoundaries[d.PID];
+          int nSegments = d.segmentBoundaries[d.PID + 1] - firstSegment;
 
           double soi_snr = compute_snr(
-            in_buf, d->M*nSegments, d->M*firstSegment, N, input, d);
+            in_buf, d.M*nSegments, d.M*firstSegment, d.N, input, &d);
           double soi_max_err = compute_normalized_inf_norm(
-            in_buf, d->M*nSegments, d->M*firstSegment, N, input);
+            in_buf, d.M*nSegments, d.M*firstSegment, d.N, input);
           if (0 == PID) {
             if (soi_with_fftw) {
               printf("snr_soi_fftw%d_%d\t%f\n", input, k, soi_snr);
@@ -475,11 +526,11 @@ int main(int argc, char *argv[])
 
 #ifdef SOI_FFT_PRINT_MPI_TIMES
         int numOfSegToReceive =
-          d->segmentBoundaries[d->PID + 1] - d->segmentBoundaries[d->PID];
+          d.segmentBoundaries[d.PID + 1] - d.segmentBoundaries[d.PID];
 
-        for (int p = 0; p < d->P; ++p) {
+        for (int p = 0; p < d.P; ++p) {
           MPI_Barrier(MPI_COMM_WORLD);
-          if (d->PID == p) {
+          if (d.PID == p) {
             FILE *fp = fopen("time.out", p == 0 ? "w" : "a");
             fprintf(fp, "[%d] %f %f ", p, time_begin_mpi, time_end_mpi);
             for (int ik = 0; ik < numOfSegToReceive; ++ik) {
@@ -491,10 +542,10 @@ int main(int argc, char *argv[])
         } // for each rank
 #endif
 
-        free_soi_descriptor(d);
+        free_soi_descriptor(&d);
 
         // Write output to file.
-        mpiWriteFileSequentially(options.soi_out_file_name, in_buf, N/P);
+        mpiWriteFileSequentially(options.soi_out_file_name, in_buf, d.N/P);
       } // for (int k = kmin; k <= kmax; k *= 2) {
     }
   } // for (int input = 0; input < 2; input++) {

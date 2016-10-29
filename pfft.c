@@ -45,127 +45,36 @@
 %
 */
 
-// Our first rect + gauss
-//static double tau = 0.5;
-//static double sigma = 121.0936;
-//cfft_size_t B = 44;
-
 // The best one found after solving the issue with SNR measurement.
-double tau = 928/1024.;
-double sigma = 373.7314;
-cfft_size_t B = 72;
-static cfft_size_t M, S, M_hat;
 static cfft_size_t kappa;
-static double mu;
 
-////////////////////////////////////////////////////////////////////////////////
-// with mu = 1.25
-
-// 179dB
-//static const double tau = 0.154;
-//static const double sigma = 73.2102363;
-//cfft_size_t B = 30;
-
-// 193dB
-//static const double tau = 0.2927;
-//static const double sigma = 90.7306;
-//cfft_size_t B = 32;
-
-// 200dB
-//static const double tau = 0.373;
-//static const double sigma = 102.1115361;
-//cfft_size_t B = 36;
-
-// 213dB
-//static const double tau = 0.4476;
-//static const double sigma = 119.2272;
-//cfft_size_t B = 38;
-
-// 220dB
-//static const double tau = 0.531;
-//static const double sigma = 136.5983707;
-//cfft_size_t B = 41;
-
-// 220dB
-//static const double tau = 0.531;
-//static const double sigma = 136.5983707;
-//cfft_size_t B = 41;
-
-// 233dB
-//static const double tau = 0.578;
-//static const double sigma = 155.3322;
-//cfft_size_t B = 44;
-
-// 239dB
-//static const double tau = 0.664;
-//static const double sigma = 182.5254421;
-//cfft_size_t B = 46;
-
-// 259dB
-//static const double tau = 0.782;
-//static const double sigma = 245.8927353;
-//cfft_size_t B = 54;
-
-// 282dB
-//static const double tau = 0.899;
-//static const double sigma = 352.7647081; 
-//cfft_size_t B = 60;
-
-//static const double tau = 0.79;
-//static const double sigma = 264.167;
-//static const double tau = 0.9;
-//static const double sigma = 359.524;
-
-////////////////////////////////////////////////////////////////////////////////
-// with mu = 1.125
-
-// 193dB
-//static const double tau = 0.6476;
-//static const double sigma = 363.891;
-//cfft_size_t B = 66;
-
-// 213dB
-//static const double tau = 0.7238;
-//static const double sigma = 476.8683;
-//cfft_size_t B = 76;
-
-////////////////////////////////////////////////////////////////////////////////
-// with mu = 1.5
-
-// 235dB
-//static const double tau = 0.0554;
-//static const double sigma = 36.6513;
-//cfft_size_t B = 22;
-
-static cfft_size_t M;
-
-cfft_complex_t w_f(cfft_size_t i, cfft_size_t n)
+cfft_complex_t w_f(cfft_size_t i, cfft_size_t n, soi_desc_t *desc)
 {
-  cfft_size_t theta = i/(B*S);
-  cfft_size_t j = i%(B*S);
+  cfft_size_t theta = i/(desc->B*desc->S);
+  cfft_size_t j = i%(desc->B*desc->S);
 
-  double t = ((double)theta/M_hat - (double)j/n + (double)kappa/(2*M))*M;
+  double t = ((double)theta/desc->M_hat - (double)j/n + (double)kappa/(2*desc->M))*desc->M;
   double y;
 
   if (t == 0) {
     y = 1;
   }
   else {
-    y = sinl(VERIFY_PI*tau*t)/(PI*tau*t)*exp(-PI*PI*t*t/sigma);
+    y = sinl(VERIFY_PI*desc->tau*t)/(PI*desc->tau*t)*exp(-PI*PI*t*t/desc->sigma);
   }
 
   cfft_complex_t r = cosl(VERIFY_PI*t) + I*sinl(VERIFY_PI*t);
 
-  return r*y/mu;
+  return r*y/desc->mu;
 }
 
-cfft_complex_t W_inv_f(cfft_size_t i, cfft_size_t n)
+cfft_complex_t W_inv_f(cfft_size_t i, cfft_size_t n, soi_desc_t *desc)
 {
-  double t = (double)i/M - 0.5;
+  double t = (double)i/desc->M - 0.5;
 
-  double y = 1/(2*tau)*(erfc(sqrt(sigma)*(t - tau/2)) - erfc(sqrt(sigma)*(t + tau/2)));
+  double y = 1/(2*desc->tau)*(erfc(sqrt(desc->sigma)*(t - desc->tau/2)) - erfc(sqrt(desc->sigma)*(t + desc->tau/2)));
 
-  double delta = (double)kappa / (2*M);
+  double delta = (double)kappa / (2*desc->M);
   cfft_complex_t r = cosl(2*VERIFY_PI*delta*i) - I*sinl(2*VERIFY_PI*delta*i);
 
   return r/y;
@@ -173,15 +82,14 @@ cfft_complex_t W_inv_f(cfft_size_t i, cfft_size_t n)
 
 static cfft_complex_t *g_gamma_tilde= NULL, *g_alpha_tilde = NULL, *g_beta_tilde = NULL;
 
-void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n, 
+void init_soi_descriptor(soi_desc_t *d, MPI_Comm comm, cfft_size_t n, 
 						   cfft_size_t k, cfft_size_t n_mu, cfft_size_t d_mu, 
-						   window_func_t w_f, window_func_t W_inv_f, cfft_size_t B,
+						   cfft_size_t B,
                int use_fftw, unsigned fftw_flags)
 {
 	int rank, size;
-	soi_desc_t * d = (soi_desc_t *) malloc(sizeof(soi_desc_t));
 
-  kappa = B - d_mu;
+  kappa = d->B - d->d_mu;
 
 	d->comm = comm;
 	CFFT_ASSERT_MPI( MPI_Comm_size(d->comm, &size) );
@@ -193,14 +101,14 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
   for (int p = 0; p <= d->P; ++p) {
     d->segmentBoundaries[p] = p*k;
   }
-	S = d->S = (d->k)*(d->P);
+	d->S = (d->k)*(d->P);
 	d->N = n;
-	M = d->M = (d->N)/(d->S);
+	d->M = (d->N)/(d->S);
 	d->n_mu = n_mu;
 	d->d_mu = d_mu;
 	d->B = B;
-	M_hat = d->M_hat = ((d->n_mu)*(d->M))/(d->d_mu);
-	mu = d->mu = (double)(d->n_mu)/(d->d_mu);
+	d->M_hat = ((d->n_mu)*(d->M))/(d->d_mu);
+	d->mu = (double)(d->n_mu)/(d->d_mu);
   posix_memalign((void **)&d->w, 4096, sizeof(cfft_complex_t)*B*(d->S)*n_mu);
   posix_memalign((void **)&d->w_dup, 4096, sizeof(SIMDFPTYPE)*B*(d->S)*n_mu);
   posix_memalign((void **)&d->W_inv, 4096, sizeof(cfft_complex_t)*(d->M));
@@ -240,8 +148,6 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
   posix_memalign((void **)&d->delta, 4096, sizeof(int)*4*d->M_hat*k);
   d->epsilon = NULL;
 
-	d->w_f = w_f;
-	d->W_inv_f = W_inv_f;
   d->sendRequests = (MPI_Request *)malloc(sizeof(MPI_Request)*d->P*d->k);
   d->recvRequests = (MPI_Request *)malloc(sizeof(MPI_Request)*d->P*d->S);
 
@@ -251,7 +157,7 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
       for (cfft_size_t j = 0; j < d->B; j++)
         for (cfft_size_t ii = i; ii < i + CACHE_LINE_LEN/2; ii++)
           (d->w)[i*d->B*d->n_mu + (j*d->n_mu + theta)*(CACHE_LINE_LEN/2) + ii - i] =
-            d->w_f(theta*d->B*d->S + j*d->S + ii, d->N);
+            w_f(theta*d->B*d->S + j*d->S + ii, d->N, d);
 
       for (cfft_size_t j = 0; j < d->B; j++) {
         for (cfft_size_t ii = 0; ii < 2; ii++) {
@@ -274,7 +180,7 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
 
 #pragma omp parallel for
 	for (cfft_size_t i=0; i<d->M; i++) {
-		(d->W_inv)[i] = (d->W_inv_f)(i, d->N);
+		(d->W_inv)[i] = W_inv_f(i, d->N, d);
   }
 
 	// create DFT descriptors
@@ -302,8 +208,6 @@ void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n,
     if (status & !DftiErrorClass(status, DFTI_NO_ERROR))
       fprintf(stderr, "%s\n", DftiErrorMessage(status));
   }
-
-	*d_ptr = d;
 
   if (0 == d->PID) printf("freq = %f\n", get_cpu_freq());
 }
@@ -340,8 +244,6 @@ void free_soi_descriptor(soi_desc_t * d)
     if (d->epsilon) free(d->epsilon); d->epsilon = NULL;
   }
   if (d->segmentBoundaries) free(d->segmentBoundaries); d->segmentBoundaries = NULL;
-
-	free(d);
 }
 
 #ifdef MEASURE_LOAD_IMBALANCE

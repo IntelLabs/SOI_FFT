@@ -17,5 +17,13 @@ Tak Peter Tang, Pradeep Dubey, and Daehyun Kim, The International Conference for
 High Performance Computing, Networking, Storage, and Analysis, 2013,
 http://pcl.intel-research.net/publications/a34-park.pdf
 
-It is somewhat embarassing that it took us 4 years to open source this work due
+It is somewhat embarrassing that it took us 4 years to open source this work due
 to our laziness. :(
+Still, we hope our code can be useful for those who need a fast multi-node FFT
+or someone who wants to play with ideas of further improving SOI FFT.
+For example, what would be the most efficient way of using SOI FFT for
+multi-dimensional FFT is an interesting problem.
+We also looked at compressing data sent during all-to-all that can be useful
+when the output has banded structure (most signal power concentrated to a
+narrow frequency range), but was not able to get significant speedups for
+real-life examples. See use_vlc option for our attempt.

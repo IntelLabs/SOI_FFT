@@ -230,9 +230,7 @@ do {                                                \
 		COMPLEX_PTR(x)[__i] = COMPLEX_PTR(y)[__i];  \
 } while (0);
 
-typedef cfft_complex_t (*window_func_t)(cfft_size_t, cfft_size_t N);
-
-typedef struct 
+typedef struct
 {
 	MPI_Comm comm;
 	cfft_size_t P;   // number of processors
@@ -250,15 +248,14 @@ typedef struct
   cfft_complex_t *alpha_ghost;
   int *delta, *epsilon;
 	cfft_size_t n_mu;
-	cfft_size_t d_mu;
+	cfft_size_t d_mu; // d_mu should devide the input size
 	cfft_size_t M_hat; // length of one segment
 	double mu; // mu = n_mu/d_mu is the oversampling factor
 	cfft_size_t B;
+  double tau; // a paramter controls the width of window function. The wider the width, the smaller truncation error becomes
+  double sigma;
 	DFTI_DESCRIPTOR_HANDLE desc_dft_s;
 	DFTI_DESCRIPTOR_HANDLE desc_dft_m_hat;
-// this is for tuning purposes only
-	window_func_t W_inv_f; // pointer to user provided inverse frequency window function
-	window_func_t w_f; // pointer to user provided time window function
 #ifdef USE_FFTW
   int use_fftw;
   unsigned fftw_flags;
@@ -280,9 +277,9 @@ typedef struct
 __declspec(noinline)
 void parallel_filter_subsampling(soi_desc_t * d, cfft_complex_t * alpha_dt);
 
-void create_soi_descriptor(soi_desc_t ** d_ptr, MPI_Comm comm, cfft_size_t n, 
+void init_soi_descriptor(soi_desc_t *d_ptr, MPI_Comm comm, cfft_size_t n, 
 						   cfft_size_t k, cfft_size_t n_mu, cfft_size_t d_mu, 
-						   window_func_t w, window_func_t W_inv, cfft_size_t B,
+						   cfft_size_t B,
                int use_fftw, unsigned fftw_flags);
 
 void compute_soi(soi_desc_t * d, cfft_complex_t *alpha_dt);
