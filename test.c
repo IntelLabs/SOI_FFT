@@ -127,13 +127,12 @@ static options parseArgs(int argc, char *argv[], soi_desc_t *desc)
   }
   desc->N = (powIdx == -1) ? atol(argv[optind]) : pow(atol(argv[optind]), atol(argv[optind] + powIdx + 1));
   
-  int P, PID;
-  MPI_Comm_size(MPI_COMM_WORLD, &P);
-	MPI_Comm_rank(MPI_COMM_WORLD, &PID);
+  MPI_Comm_size(MPI_COMM_WORLD, &desc->P);
+	MPI_Comm_rank(MPI_COMM_WORLD, &desc->rank);
 
-  if (desc->N%(desc->d_mu*ret.k_max*P*16) != 0) {
-    if (0 == PID) {
-      fprintf(stderr, "(d_mu=%d)*(P=%d)*(k=%d)*64 must divide N\n", desc->d_mu, P, ret.k_max);
+  if (desc->N%(desc->d_mu*ret.k_max*desc->P*16) != 0) {
+    if (0 == desc->rank) {
+      fprintf(stderr, "(d_mu=%d)*(P=%d)*(k=%d)*64 must divide N\n", desc->d_mu, desc->P, ret.k_max);
     }
     exit(-1);
   }
@@ -141,7 +140,7 @@ static options parseArgs(int argc, char *argv[], soi_desc_t *desc)
   return ret;
 }
 
-static void initMPI(int argc, char *argv[], int *P, int *PID)
+static void initMPI(int argc, char *argv[])
 {
   int ret, len;
   char buf[MPI_MAX_ERROR_STRING];
@@ -157,18 +156,6 @@ static void initMPI(int argc, char *argv[], int *P, int *PID)
     fprintf(stderr, "MPI doesn't provide MPI_THREAD_SERIALIZED\n");
     exit(-1);
   }
-	ret = MPI_Comm_size(MPI_COMM_WORLD, P);
-  if (MPI_SUCCESS != ret) {
-    MPI_Error_string(ret, buf, &len);
-    fprintf(stderr, buf);
-    exit(-1);
-  }
-	ret = MPI_Comm_rank(MPI_COMM_WORLD, PID);
-  if (MPI_SUCCESS != ret) {
-    MPI_Error_string(ret, buf, &len);
-    fprintf(stderr, buf);
-    exit(-1);
-  }
 }
 
 /**
@@ -176,7 +163,7 @@ static void initMPI(int argc, char *argv[], int *P, int *PID)
  */
 static void mpiWriteFileSequentially(char *fileName, cfft_complex_t *buffer, size_t len)
 {
-  int P, PID;
+  int P, rank;
   int ret, errLen;
   char buf[MPI_MAX_ERROR_STRING];
 
@@ -186,7 +173,7 @@ static void mpiWriteFileSequentially(char *fileName, cfft_complex_t *buffer, siz
     fprintf(stderr, buf);
     exit(-1);
   }
-	ret = MPI_Comm_rank(MPI_COMM_WORLD, &PID);
+	ret = MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   if (MPI_SUCCESS != ret) {
     MPI_Error_string(ret, buf, &errLen);
     fprintf(stderr, buf);
@@ -195,7 +182,7 @@ static void mpiWriteFileSequentially(char *fileName, cfft_complex_t *buffer, siz
 
   for (int i = 0; i < P; i++) {
     MPI_Barrier(MPI_COMM_WORLD);
-    if (PID == i) {
+    if (rank == i) {
       if (NULL != fileName) {
         FILE *fp = fopen(fileName, i == 0 ? "w" : "a");
         for (int i = 0; i < len; ++i) {
@@ -256,42 +243,19 @@ int main(int argc, char *argv[])
 // 1.5   | 832/1024 |  93.4329    | 38 | 289.4688
 // 1.5   | 0.0554   |  36.6513    | 22 | 235 *
 
-////////////////////////////////////////////////////////////////////////////////
-// with mu = 1.125
-
-// 193dB
-//static const double tau = 0.6476;
-//static const double sigma = 363.891;
-//cfft_size_t B = 66;
-
-// 213dB
-//static const double tau = 0.7238;
-//static const double sigma = 476.8683;
-//cfft_size_t B = 76;
-
-////////////////////////////////////////////////////////////////////////////////
-// with mu = 1.5
-
-// 235dB
-//static const double tau = 0.0554;
-//static const double sigma = 36.6513;
-//cfft_size_t B = 22;
-
-
 	cfft_size_t i;
 	cfft_complex_t *in_buf = NULL;
 	double time_mkl, time_soi, max_err, g_max_err;
 	MKL_LONG size;
 	DFTI_DESCRIPTOR_DM_HANDLE desc;
 
-  int P, PID;
-  initMPI(argc, argv, &P, &PID);
+  initMPI(argc, argv);
   options options = parseArgs(argc, argv, &d);
 
-  if (0 == PID) {
+  if (0 == d.rank) {
     printf(
       "P = %d, N = %ld, n_mu = %ld, d_mu = %ld, B = %ld, sigma = %f\n",
-      P, d.N, d.n_mu, d.d_mu, d.B, d.sigma);
+      d.P, d.N, d.n_mu, d.d_mu, d.B, d.sigma);
   }
 
   double flop = 5.*d.N*log2(d.N);
@@ -299,7 +263,7 @@ int main(int argc, char *argv[])
   for (int m = 0; m < 4; m++)
   for (int input = options.input_min; input <= options.input_max; input++) {
     if (!options.no_mkl) {
-      if (1 == P) {
+      if (1 == d.P) {
         DFTI_DESCRIPTOR_HANDLE desc;
         DftiCreateDescriptor(&desc, DFTI_TYPE, DFTI_COMPLEX, 1, d.N);
         DftiCommitDescriptor(desc);
@@ -309,7 +273,7 @@ int main(int argc, char *argv[])
         populate_input(in_buf, d.N, 0, d.N, input);
 
         // Write input to file.
-        mpiWriteFileSequentially(options.in_file_name, in_buf, d.N/P);
+        mpiWriteFileSequentially(options.in_file_name, in_buf, d.N/d.P);
 
         time_mkl = -MPI_Wtime();
         DftiComputeForward(desc, in_buf);
@@ -331,7 +295,7 @@ int main(int argc, char *argv[])
           fprintf(stderr, "%s:%d %s\n", __FILE__, __LINE__, DftiErrorMessage(status));
         if (in_buf == NULL) {
 #ifdef USE_LARGE_PAGE
-          in_buf = (cfft_complex_t *)large_malloc(sizeof(cfft_complex_t)*size*n_mu/d_mu, PID);
+          in_buf = (cfft_complex_t *)large_malloc(sizeof(cfft_complex_t)*size*n_mu/d_mu, d.rank);
 #else
           size_t in_buf_size = sizeof(cfft_complex_t)*size*d.n_mu/d.d_mu*2;
           posix_memalign((void **)&in_buf, 4096, in_buf_size);
@@ -343,11 +307,11 @@ int main(int argc, char *argv[])
         status = DftiCommitDescriptorDM(desc);
         if (status && !DftiErrorClass(status, DFTI_NO_ERROR))
           fprintf(stderr, "%s\n", DftiErrorMessage(status));
-        populate_input(in_buf, d.N/P, PID*d.N/P, d.N, input);
+        populate_input(in_buf, d.N/d.P, d.rank*d.N/d.P, d.N, input);
 
         MPI_Barrier(MPI_COMM_WORLD);
         // Write input to file.
-        mpiWriteFileSequentially(options.in_file_name, in_buf, d.N/P);
+        mpiWriteFileSequentially(options.in_file_name, in_buf, d.N/d.P);
 
         MPI_Barrier(MPI_COMM_WORLD);
         time_mkl = -MPI_Wtime();
@@ -358,22 +322,22 @@ int main(int argc, char *argv[])
         DftiFreeDescriptorDM(&desc);
       }
 
-      if (0 == PID)
+      if (0 == d.rank)
       {
         double gflops = flop/time_mkl/1e9;
         printf("flops_mkl\t%f\n", gflops);
       }
 
       // Write output to file.
-      mpiWriteFileSequentially(options.mkl_out_file_name, in_buf, d.N/P);
+      mpiWriteFileSequentially(options.mkl_out_file_name, in_buf, d.N/d.P);
 
       if (!options.no_snr) {
         double mkl_snr = INFINITY, mkl_max_err = 0;
         if (input != 2 && input != 4 && input != 5) {
-          mkl_snr = compute_snr(in_buf, d.N/P, PID*d.N/P, d.N, input, NULL);
-          mkl_max_err = compute_normalized_inf_norm(in_buf, d.N/P, PID*d.N/P, d.N, input);
+          mkl_snr = compute_snr(in_buf, d.N/d.P, d.rank*d.N/d.P, d.N, input, NULL);
+          mkl_max_err = compute_normalized_inf_norm(in_buf, d.N/d.P, d.rank*d.N/d.P, d.N, input);
         }
-        if (0 == PID) {
+        if (0 == d.rank) {
           printf("snr_mkl%d\t%f\n", input, mkl_snr);
           printf("max_err_mkl%d\t%e\n", input, mkl_max_err);
         }
@@ -388,12 +352,12 @@ int main(int argc, char *argv[])
       ptrdiff_t local_ni = N, local_i_start = 0, local_no = N, local_o_start = 0;
       FFTW_PLAN fftw_plan;
 
-      if (1 == P) {
+      if (1 == d.P) {
         FFTW_PLAN_WITH_NTHREADS(omp_get_max_threads());
 
         if (in_buf == NULL) {
 #ifdef USE_LARGE_PAGE
-          in_buf = (FFTW_COMPLEX *)large_malloc(N*sizeof(FFTW_COMPLEX)*n_mu/d_mu, PID);
+          in_buf = (FFTW_COMPLEX *)large_malloc(N*sizeof(FFTW_COMPLEX)*n_mu/d_mu, d.rank);
 #else
           in_buf = (FFTW_COMPLEX *)FFTW_MALLOC(N*sizeof(FFTW_COMPLEX)*n_mu/d_mu);
 #endif
@@ -420,7 +384,7 @@ int main(int argc, char *argv[])
 
         if (in_buf == NULL) {
 #ifdef USE_LARGE_PAGE
-          in_buf = (FFTW_COMPLEX *)large_malloc(total_local_size*sizeof(FFTW_COMPLEX)*n_mu/d_mu, PID);
+          in_buf = (FFTW_COMPLEX *)large_malloc(total_local_size*sizeof(FFTW_COMPLEX)*n_mu/d_mu, d.rank);
 #else
           in_buf = (FFTW_COMPLEX *)FFTW_MALLOC(total_local_size*sizeof(FFTW_COMPLEX)*n_mu/d_mu);
 #endif
@@ -451,38 +415,40 @@ int main(int argc, char *argv[])
       if (!options.no_snr) {
         double fftw_snr = compute_snr(in_buf, local_ni, local_i_start, N, input, NULL);
         double fftw_max_err = compute_normalized_inf_norm(in_buf, local_ni, local_i_start, N, input);
-        if (0 == PID) {
+        if (0 == d.rank) {
           printf("snr_fftw%d\t%f\n", input, fftw_snr);
           printf("max_err_fftw%d\t%e\n", input, fftw_max_err);
         }
       }
 
       FFTW_CLEANUP_THREADS();
-      if (P > 1) FFTW_MPI_CLEANUP();
+      if (d.P > 1) FFTW_MPI_CLEANUP();
     }
 #endif
 
     //////////////////////////////
     for (int soi_with_fftw = 0; soi_with_fftw <= options.soi_with_fftw; ++soi_with_fftw) {
       for (int k = options.k_min; k <= options.k_max && !options.no_soi; k *= 2) {
-        init_soi_descriptor(
-          &d, MPI_COMM_WORLD, d.N, k, d.n_mu, d.d_mu, d.B,
-          soi_with_fftw, options.fftw_flags);
+        init_soi_descriptor(&d, MPI_COMM_WORLD, k, soi_with_fftw, options.fftw_flags);
         d.use_vlc = options.use_vlc;
         d.comm_to_comp_cost_ratio = options.comm_to_comp_cost_ratio;
 
+        cfft_size_t S = d.k*d.P; // total number of segments
+        cfft_size_t M = d.N/S; // length of one segment, before oversampling
+        cfft_size_t M_hat = d.n_mu*M/d.d_mu; // length of one segment, after oversampling
+
         if (in_buf == NULL) {
-          posix_memalign((void **)&in_buf, 4096, sizeof(cfft_complex_t)*d.M_hat*d.k);
+          posix_memalign((void **)&in_buf, 4096, sizeof(cfft_complex_t)*M_hat*d.k);
         }
 
-        populate_input(in_buf, d.N/P, PID*d.N/P, d.N, input);
+        populate_input(in_buf, d.N/d.P, d.rank*d.N/d.P, d.N, input);
         MPI_Barrier(MPI_COMM_WORLD);
         time_soi = -MPI_Wtime();
         compute_soi(&d, in_buf);
 
         MPI_Barrier(MPI_COMM_WORLD);
         time_soi += MPI_Wtime();
-        if (0 == PID) {
+        if (0 == d.rank) {
           if (soi_with_fftw) {
             printf("time_soi_fftw_%d\t%f\n", k, time_soi);
           }
@@ -505,14 +471,14 @@ int main(int argc, char *argv[])
         }
 
         if (!options.no_snr) {
-          int firstSegment = d.segmentBoundaries[d.PID];
-          int nSegments = d.segmentBoundaries[d.PID + 1] - firstSegment;
+          int firstSegment = d.segmentBoundaries[d.rank];
+          int nSegments = d.segmentBoundaries[d.rank + 1] - firstSegment;
 
           double soi_snr = compute_snr(
-            in_buf, d.M*nSegments, d.M*firstSegment, d.N, input, &d);
+            in_buf, M*nSegments, M*firstSegment, d.N, input, &d);
           double soi_max_err = compute_normalized_inf_norm(
-            in_buf, d.M*nSegments, d.M*firstSegment, d.N, input);
-          if (0 == PID) {
+            in_buf, M*nSegments, M*firstSegment, d.N, input);
+          if (0 == d.rank) {
             if (soi_with_fftw) {
               printf("snr_soi_fftw%d_%d\t%f\n", input, k, soi_snr);
               printf("max_err_soi_fftw%d_%d\t%e\n", input, k, soi_max_err);
@@ -526,11 +492,11 @@ int main(int argc, char *argv[])
 
 #ifdef SOI_FFT_PRINT_MPI_TIMES
         int numOfSegToReceive =
-          d.segmentBoundaries[d.PID + 1] - d.segmentBoundaries[d.PID];
+          d.segmentBoundaries[d.rank + 1] - d.segmentBoundaries[d.rank];
 
         for (int p = 0; p < d.P; ++p) {
           MPI_Barrier(MPI_COMM_WORLD);
-          if (d.PID == p) {
+          if (d.rank == p) {
             FILE *fp = fopen("time.out", p == 0 ? "w" : "a");
             fprintf(fp, "[%d] %f %f ", p, time_begin_mpi, time_end_mpi);
             for (int ik = 0; ik < numOfSegToReceive; ++ik) {
@@ -545,7 +511,7 @@ int main(int argc, char *argv[])
         free_soi_descriptor(&d);
 
         // Write output to file.
-        mpiWriteFileSequentially(options.soi_out_file_name, in_buf, d.N/P);
+        mpiWriteFileSequentially(options.soi_out_file_name, in_buf, d.N/d.P);
       } // for (int k = kmin; k <= kmax; k *= 2) {
     }
   } // for (int input = 0; input < 2; input++) {

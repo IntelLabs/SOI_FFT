@@ -310,37 +310,39 @@ double compute_snr(
     ASSERT_DFTI( DftiSetValueDM(desc, DFTI_PLACEMENT, DFTI_INPLACE) );
     ASSERT_DFTI( DftiCommitDescriptorDM(desc) );
 
-    populate_input(tempBuf, globalLen/d->P, d->PID*globalLen/d->P, globalLen, kind);
+    populate_input(tempBuf, globalLen/d->P, d->rank*globalLen/d->P, globalLen, kind);
 
     ASSERT_DFTI( DftiComputeForwardDM(desc, tempBuf) );
 
     ASSERT_DFTI( DftiFreeDescriptorDM(&desc) );
 
     // repartition data to match with SOI output
+    cfft_size_t S = d->k*d->P;
+    cfft_size_t M = d->N/S;
     int nSegments =
-      d->segmentBoundaries[d->PID + 1] - d->segmentBoundaries[d->PID];
-    output2 = (cfft_complex_t *)malloc(sizeof(cfft_complex_t)*nSegments*d->M);
+      d->segmentBoundaries[d->rank + 1] - d->segmentBoundaries[d->rank];
+    output2 = (cfft_complex_t *)malloc(sizeof(cfft_complex_t)*nSegments*M);
 
     MPI_Datatype segmentType;
-    MPI_Type_contiguous(d->M*2, MPI_TYPE, &segmentType); // *2 for complex
+    MPI_Type_contiguous(M*2, MPI_TYPE, &segmentType); // *2 for complex
     MPI_Type_commit(&segmentType);
 
     int sendCnts[d->P], recvCnts[d->P], sendDispls[d->P], recvDispls[d->P];
     for (int p = 0; p < d->P; ++p) {
-      int firstSegmentToSend = MAX(d->k*d->PID, d->segmentBoundaries[p]);
-      int firstSegmentToRecv = MAX(d->segmentBoundaries[d->PID], d->k*p);
+      int firstSegmentToSend = MAX(d->k*d->rank, d->segmentBoundaries[p]);
+      int firstSegmentToRecv = MAX(d->segmentBoundaries[d->rank], d->k*p);
 
       sendCnts[p] =
-        MIN(d->k*(d->PID + 1), d->segmentBoundaries[p + 1]) -
+        MIN(d->k*(d->rank + 1), d->segmentBoundaries[p + 1]) -
         firstSegmentToSend,
       sendCnts[p] = MAX(sendCnts[p], 0);
-      sendDispls[p] = firstSegmentToSend - d->k*d->PID;
+      sendDispls[p] = firstSegmentToSend - d->k*d->rank;
 
       recvCnts[p] =
-        MIN(d->k*(p + 1), d->segmentBoundaries[d->PID + 1]) -
+        MIN(d->k*(p + 1), d->segmentBoundaries[d->rank + 1]) -
         firstSegmentToRecv,
       recvCnts[p] = MAX(recvCnts[p], 0);
-      recvDispls[p] = firstSegmentToRecv - d->segmentBoundaries[d->PID];
+      recvDispls[p] = firstSegmentToRecv - d->segmentBoundaries[d->rank];
     }
 
     CFFT_ASSERT_MPI(MPI_Alltoallv(
@@ -379,9 +381,9 @@ double compute_snr(
     powerSig += creal(ref)*creal(ref) + cimag(ref)*cimag(ref);
   }
 
-  /*int PID;
-  MPI_Comm_rank(MPI_COMM_WORLD, &PID); 
-  printf("%d err=%g sig=%g snr=%g\n", PID, powerErr, powerSig, 10*log10(powerSig/powerErr));*/
+  /*int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank); 
+  printf("%d err=%g sig=%g snr=%g\n", rank, powerErr, powerSig, 10*log10(powerSig/powerErr));*/
 
   double globalPowerErr, globalPowerSig;
   MPI_Reduce(&powerErr, &globalPowerErr, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -392,8 +394,8 @@ double compute_snr(
 
 double compute_normalized_inf_norm(
   cfft_complex_t *output, size_t localLen, size_t offset, size_t globalLen, int kind) {
-  /*int PID;
-  MPI_Comm_rank(MPI_COMM_WORLD, &PID); */
+  /*int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank); */
 
   double maxErr = 0, maxSig = 0;
   size_t maxErrIdx = -1;
@@ -406,14 +408,14 @@ double compute_normalized_inf_norm(
       maxErrIdx = idx;
       maxErr = diff_mag;
 
-      /*if (0 == PID && 3072 == idx) {
+      /*if (0 == rank && 3072 == idx) {
         printf("expected:(%g %g), actual:(%g %g), diff=%g\n", creal(ref), cimag(ref), creal(output[idx]), cimag(output[idx]), diff_mag);
       }*/
     }
     maxSig = MAX(creal(ref)*creal(ref) + cimag(ref)*cimag(ref), maxSig);
   }
 
-  //printf("%d %ld %g\n", PID, maxErrIdx, maxErr);
+  //printf("%d %ld %g\n", rank, maxErrIdx, maxErr);
 
   double globalMaxErr, globalMaxSig;
   MPI_Reduce(&maxErr, &globalMaxErr, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);

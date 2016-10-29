@@ -56,13 +56,15 @@ void parallel_filter_subsampling_n_mu_5(soi_desc_t * d, cfft_complex_t * alpha_d
 
 	MPI_Comm comm = d->comm;
 	cfft_size_t P = d->P;
-	cfft_size_t PID = d->PID;
-	cfft_size_t PID_left = (P+PID-1)%P;
-	cfft_size_t PID_right = (PID+1)%P;
+	cfft_size_t rank = d->rank;
+	cfft_size_t PID_left = (P+rank-1)%P;
+	cfft_size_t PID_right = (rank+1)%P;
 
-	cfft_size_t S = d->S;
+  cfft_size_t S = d->k*d->P; // total number of segments
 	cfft_size_t d_mu = d->d_mu;
 	cfft_size_t n_mu = d->n_mu;
+  cfft_size_t M = d->N/S; // length of one segment, before oversampling
+  cfft_size_t M_hat = d->n_mu*M/d->d_mu; // length of one segment, after oversampling
 
 /*
 %..Let's begin. First carry out the computation with data that is already
@@ -80,20 +82,20 @@ void parallel_filter_subsampling_n_mu_5(soi_desc_t * d, cfft_complex_t * alpha_d
 %...first compute the gamma_tilde that requires only alpha that the
 %...processor has
 */
-	cfft_size_t K_0 = floor(  ((d->M/P)-B) / d_mu );
-  if (d->M/P < B) {
-    if (0 == d->PID) {
+	cfft_size_t K_0 = floor(  ((M/P)-B) / d_mu );
+  if (M/P < B) {
+    if (0 == rank) {
       fprintf(stderr, "input size too small\n");
     }
     exit(0);
   }
-  if (0 == d->PID)
+  if (0 == rank)
     printf(
       "k = %ld, S = %ld, M = %ld, M_hat = %ld, K_0 = %ld\n",
-      d->k, d->S, d->M, d->M_hat, K_0);
+      d->k, S, M, M_hat, K_0);
 
 MPI_TIMED_SECTION_BEGIN();
-	cfft_size_t b_cnt = d->M/P - K_0*d_mu;
+	cfft_size_t b_cnt = M/P - K_0*d_mu;
   memcpy(d->alpha_ghost, alpha_dt + K_0*d_mu*S, b_cnt*S*sizeof(cfft_complex_t));
 	cfft_size_t n_elements = (B-d_mu)*S;
 	cfft_size_t addr_start = b_cnt*S;
@@ -116,7 +118,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #define THETA_UNROLL_FACTOR N_MU
 
   size_t num_thread_groups = MIN(S/(CACHE_LINE_LEN/2), 8);
-  if (0 == PID && nthreads < num_thread_groups) {
+  if (0 == rank && nthreads < num_thread_groups) {
     fprintf(stderr, "OMP_NUM_THREADS should be greater than equal to %d. Consider increasing OMP_NUM_THREADS or decreasing k\n", num_thread_groups);
     exit(-1);
   }
@@ -161,7 +163,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
       input_buffer[2*k + 1] = _MM_LOAD((VAL_TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i) + SIMD_WIDTH);
     }
 
-    /*if (0 == d->PID && 0 == threadid) {
+    /*if (0 == rank && 0 == threadid) {
       for (int j = 0; j < B - d_mu; ++j) {
         cfft_complex_t c = alpha_dt[(j_begin*d_mu + j)*S];
         printf("(%g %g) ", __real__(c), __imag__(c));
@@ -184,7 +186,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
       BOOST_PP_REPEAT(D_MU_TIMES_J_UNROLL_FACTOR, LOAD_INPUT_TO_BUFFER, dummy)
       cfft_complex_t *v_tmp = gamma_tilde_dt + S*j*N_MU + i;
 
-      /*if (0 == d->PID && 0 == threadid) {
+      /*if (0 == rank && 0 == threadid) {
         for (int k = 0; k < B; ++k) {
           cfft_complex_t c = ((cfft_complex_t *)(input_buffer + (input_buffer_ptr + k)%input_buffer_len*2))[0];
           printf("(%g %g) ", __real__(c), __imag__(c));
@@ -255,7 +257,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #define STORE_TEMP_J(z, j_arg, dummy) BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, STORE_TEMP_J_THETA, j_arg)
       BOOST_PP_REPEAT(J_UNROLL_FACTOR, STORE_TEMP_J, dummy);
 
-      /*if (0 == d->PID && 0 == threadid) {
+      /*if (0 == rank && 0 == threadid) {
         for (int t = 0; t < THETA_UNROLL_FACTOR; ++t) {
           cfft_complex_t c = v_tmp[S*(theta + t)];
           printf("(%g %g) ", __real__(c), __imag__(c));
@@ -281,7 +283,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 
     unsigned long long t2 = __rdtsc();
     for (int theta = 0; theta < N_MU; theta++) {
-      /*if (0 == d->PID && 0 == threadid) {
+      /*if (0 == rank && 0 == threadid) {
         for (int k = 0; k < S; ++k) {
           printf("(%g %g) ", __real__(v_tmp[S*theta + k]), __real__(v_tmp[S*theta + k]));
         }
@@ -293,7 +295,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
     }
 
     unsigned long long t3 = __rdtsc();
-    cfft_size_t l = d->M_hat/d->P;
+    cfft_size_t l = M_hat/d->P;
 
 #if N_MU == 8
     for (int jj = j*n_mu ; jj < (j + 1)*n_mu/SIMD_WIDTH*SIMD_WIDTH; jj += 2*SIMD_WIDTH) {
@@ -364,7 +366,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #else // N_MU == 8
     for (cfft_size_t theta = 0; theta < n_mu; ++theta) {
       for (int s = 0; s < S; s++) {
-        cfft_size_t l = d->M_hat/d->P;
+        cfft_size_t l = M_hat/d->P;
 
         d->alpha_tilde[s*l + j*n_mu + theta] =
           gamma_tilde_dt[S*(j*n_mu + theta) + s];
@@ -410,7 +412,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 			DftiComputeForward(d->desc_dft_s, v_tmp);
 
       for (int s = 0; s < S; s++) {
-        cfft_size_t l = d->M_hat/d->P;
+        cfft_size_t l = M_hat/d->P;
 
         d->alpha_tilde[s*l + j*n_mu + theta] =
           gamma_tilde_dt[S*(j*n_mu + theta) + s];
@@ -430,7 +432,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #endif
 
   }
-  if (0 == d->PID) {
+  if (0 == rank) {
     printf("\ttime_fss_conv\t%f", conv_clks/get_cpu_freq());
     printf("\ttime_fss_fft\t%f", fft_clks/get_cpu_freq());
     printf("\ttime_fss_trans\t%f", transpose_clks/get_cpu_freq());
@@ -439,7 +441,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 /*
 %...Now compute the rest. These will need some of the bottom part of the
 %...alpha that the current processor has, but also some from the "right"
-%...neighbor, i.e. processor  (PID+1)mod P
+%...neighbor, i.e. processor  (rank+1)mod P
 %...To make the code simplier, we will pack all these needed alpha into
 %...the data array  alpha_ghost_dt. We start by packing the alpha the
 %...processor has into alpha_ghost_dt, followed by "receiving" the
@@ -472,7 +474,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_mpi");
 */
 MPI_TIMED_SECTION_BEGIN();
 #pragma omp parallel for
-  for (cfft_size_t j=0; j<(d->M_hat/(P*n_mu))-K_0; j++)
+  for (cfft_size_t j=0; j<(M_hat/(P*n_mu))-K_0; j++)
     for (cfft_size_t theta=0; theta<n_mu; theta++) {
       cfft_complex_t *v_tmp = gamma_tilde_dt + (K_0*n_mu + j*n_mu + theta)*S;
       for (cfft_size_t i = 0; i < S; i += CACHE_LINE_LEN/2) {
@@ -495,7 +497,7 @@ MPI_TIMED_SECTION_BEGIN();
       DftiComputeForward(d->desc_dft_s, v_tmp);
 
       for (int s = 0; s < S; s++) {
-        cfft_size_t l = d->M_hat/d->P;
+        cfft_size_t l = M_hat/d->P;
 
         d->alpha_tilde[s*l + (K_0 + j)*n_mu + theta] = v_tmp[s];
       }
@@ -513,13 +515,15 @@ void parallel_filter_subsampling_n_mu_8(soi_desc_t * d, cfft_complex_t * alpha_d
 
 	MPI_Comm comm = d->comm;
 	cfft_size_t P = d->P;
-	cfft_size_t PID = d->PID;
-	cfft_size_t PID_left = (P+PID-1)%P;
-	cfft_size_t PID_right = (PID+1)%P;
+	cfft_size_t rank = d->rank;
+	cfft_size_t PID_left = (P+rank-1)%P;
+	cfft_size_t PID_right = (rank+1)%P;
 
-	cfft_size_t S = d->S;
+  cfft_size_t S = d->k*d->P; // total number of segments
 	cfft_size_t d_mu = d->d_mu;
 	cfft_size_t n_mu = d->n_mu;
+  cfft_size_t M = d->N/S; // length of one segment, before oversampling
+  cfft_size_t M_hat = d->n_mu*M/d->d_mu; // length of one segment, after oversampling
 
 /*
 %..Let's begin. First carry out the computation with data that is already
@@ -537,20 +541,20 @@ void parallel_filter_subsampling_n_mu_8(soi_desc_t * d, cfft_complex_t * alpha_d
 %...first compute the gamma_tilde that requires only alpha that the
 %...processor has
 */
-	cfft_size_t K_0 = floor(  ((d->M/P)-B) / d_mu );
-  if (d->M/P < B) {
-    if (0 == d->PID) {
+	cfft_size_t K_0 = floor(  ((M/P)-B) / d_mu );
+  if (M/P < B) {
+    if (0 == rank) {
       fprintf(stderr, "input size too small\n");
     }
     exit(0);
   }
-  if (0 == d->PID)
+  if (0 == rank)
     printf(
       "k = %ld, S = %ld, M = %ld, M_hat = %ld, K_0 = %ld\n",
-      d->k, d->S, d->M, d->M_hat, K_0);
+      d->k, S, M, M_hat, K_0);
 
 MPI_TIMED_SECTION_BEGIN();
-	cfft_size_t b_cnt = d->M/P - K_0*d_mu;
+	cfft_size_t b_cnt = M/P - K_0*d_mu;
   memcpy(d->alpha_ghost, alpha_dt + K_0*d_mu*S, b_cnt*S*sizeof(cfft_complex_t));
 	cfft_size_t n_elements = (B-d_mu)*S;
 	cfft_size_t addr_start = b_cnt*S;
@@ -575,7 +579,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #define THETA_UNROLL_FACTOR N_MU
 
   size_t num_thread_groups = MIN(S/(CACHE_LINE_LEN/2), 8);
-  if (0 == PID && nthreads < num_thread_groups) {
+  if (0 == rank && nthreads < num_thread_groups) {
     fprintf(stderr, "OMP_NUM_THREADS should be greater than equal to %d. Consider increasing OMP_NUM_THREADS or decreasing k\n", num_thread_groups);
     exit(-1);
   }
@@ -620,7 +624,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
       input_buffer[2*k + 1] = _MM_LOAD((VAL_TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i) + SIMD_WIDTH);
     }
 
-    /*if (0 == d->PID && 0 == threadid) {
+    /*if (0 == rank && 0 == threadid) {
       for (int j = 0; j < B - d_mu; ++j) {
         cfft_complex_t c = alpha_dt[(j_begin*d_mu + j)*S];
         printf("(%g %g) ", __real__(c), __imag__(c));
@@ -643,7 +647,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
       BOOST_PP_REPEAT(D_MU_TIMES_J_UNROLL_FACTOR, LOAD_INPUT_TO_BUFFER, dummy)
       cfft_complex_t *v_tmp = gamma_tilde_dt + S*j*N_MU + i;
 
-      /*if (0 == d->PID && 0 == threadid) {
+      /*if (0 == rank && 0 == threadid) {
         for (int k = 0; k < B; ++k) {
           cfft_complex_t c = ((cfft_complex_t *)(input_buffer + (input_buffer_ptr + k)%input_buffer_len*2))[0];
           printf("(%g %g) ", __real__(c), __imag__(c));
@@ -714,7 +718,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #define STORE_TEMP_J(z, j_arg, dummy) BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, STORE_TEMP_J_THETA, j_arg)
       BOOST_PP_REPEAT(J_UNROLL_FACTOR, STORE_TEMP_J, dummy);
 
-      /*if (0 == d->PID && 0 == threadid) {
+      /*if (0 == rank && 0 == threadid) {
         for (int t = 0; t < THETA_UNROLL_FACTOR; ++t) {
           cfft_complex_t c = v_tmp[S*(theta + t)];
           printf("(%g %g) ", __real__(c), __imag__(c));
@@ -740,7 +744,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 
     unsigned long long t2 = __rdtsc();
     for (int theta = 0; theta < N_MU; theta++) {
-      /*if (0 == d->PID && 0 == threadid) {
+      /*if (0 == rank && 0 == threadid) {
         for (int k = 0; k < S; ++k) {
           printf("(%g %g) ", __real__(v_tmp[S*theta + k]), __real__(v_tmp[S*theta + k]));
         }
@@ -752,12 +756,12 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
     }
 
     unsigned long long t3 = __rdtsc();
-    cfft_size_t l = d->M_hat/d->P;
+    cfft_size_t l = M_hat/d->P;
 
 #if N_MU == 8
     for (int jj = j*n_mu ; jj < (j + 1)*n_mu/SIMD_WIDTH*SIMD_WIDTH; jj += 2*SIMD_WIDTH) {
       cfft_size_t s = 0;
-      for (cfft_size_t s = 0; s < d->S; s += SIMD_WIDTH) {
+      for (cfft_size_t s = 0; s < S; s += SIMD_WIDTH) {
 #if PRECISION == 1
         // TODO!
 #else
@@ -823,7 +827,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #else // N_MU == 8
     for (cfft_size_t theta = 0; theta < n_mu; ++theta) {
       for (int s = 0; s < S; s++) {
-        cfft_size_t l = d->M_hat/d->P;
+        cfft_size_t l = M_hat/d->P;
 
         d->alpha_tilde[s*l + j*n_mu + theta] =
           gamma_tilde_dt[S*(j*n_mu + theta) + s];
@@ -869,7 +873,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 			DftiComputeForward(d->desc_dft_s, v_tmp);
 
       for (int s = 0; s < S; s++) {
-        cfft_size_t l = d->M_hat/d->P;
+        cfft_size_t l = M_hat/d->P;
 
         d->alpha_tilde[s*l + j*n_mu + theta] =
           gamma_tilde_dt[S*(j*n_mu + theta) + s];
@@ -889,7 +893,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #endif
 
   }
-  if (0 == d->PID) {
+  if (0 == rank) {
     printf("\ttime_fss_conv\t%f", conv_clks/get_cpu_freq());
     printf("\ttime_fss_fft\t%f", fft_clks/get_cpu_freq());
     printf("\ttime_fss_trans\t%f", transpose_clks/get_cpu_freq());
@@ -898,7 +902,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 /*
 %...Now compute the rest. These will need some of the bottom part of the
 %...alpha that the current processor has, but also some from the "right"
-%...neighbor, i.e. processor  (PID+1)mod P
+%...neighbor, i.e. processor  (rank+1)mod P
 %...To make the code simplier, we will pack all these needed alpha into
 %...the data array  alpha_ghost_dt. We start by packing the alpha the
 %...processor has into alpha_ghost_dt, followed by "receiving" the
@@ -931,7 +935,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_mpi");
 */
 MPI_TIMED_SECTION_BEGIN();
 #pragma omp parallel for
-  for (cfft_size_t j=0; j<(d->M_hat/(P*n_mu))-K_0; j++)
+  for (cfft_size_t j=0; j<(M_hat/(P*n_mu))-K_0; j++)
     for (cfft_size_t theta=0; theta<n_mu; theta++) {
       cfft_complex_t *v_tmp = gamma_tilde_dt + (K_0*n_mu + j*n_mu + theta)*S;
       for (cfft_size_t i = 0; i < S; i += CACHE_LINE_LEN/2) {
@@ -954,7 +958,7 @@ MPI_TIMED_SECTION_BEGIN();
       DftiComputeForward(d->desc_dft_s, v_tmp);
 
       for (int s = 0; s < S; s++) {
-        cfft_size_t l = d->M_hat/d->P;
+        cfft_size_t l = M_hat/d->P;
 
         d->alpha_tilde[s*l + (K_0 + j)*n_mu + theta] = v_tmp[s];
       }
@@ -973,7 +977,7 @@ void parallel_filter_subsampling(soi_desc_t * d, cfft_complex_t * alpha_dt)
     parallel_filter_subsampling_n_mu_8(d, alpha_dt);
   }
   else {
-    if (0 == d->PID) {
+    if (0 == d->rank) {
       fprintf(stderr, "Unsupported n_mu. Try 5 or 8\n");
     }
     exit(-1);

@@ -188,14 +188,14 @@ if (MPI_SUCCESS != err) \
 #define MPI_TIMED_SECTION_END(c, x)            \
 	{                                          \
 		__timing += MPI_Wtime();               \
-		if (d->PID == 0)                         \
+		if (d->rank == 0)                         \
 			printf("%s\t%f\n", x, __timing);   \
 	}                                          \
 }
 #define MPI_TIMED_SECTION_END_WO_NEWLINE(c, x)            \
 	{                                          \
 		__timing += MPI_Wtime();               \
-		if (d->PID == 0)                         \
+		if (d->rank == 0)                         \
 			printf("%s\t%f", x, __timing);   \
 	}                                          \
 }
@@ -233,27 +233,25 @@ do {                                                \
 typedef struct
 {
 	MPI_Comm comm;
-	cfft_size_t P;   // number of processors
-	cfft_size_t PID; // procesor's id
+	int P;   // number of processors
+	int rank; // procesor's id
 	cfft_size_t k;   // number of segments per each processor
 	cfft_size_t N;   // global vector length
-	cfft_size_t S;   // total number of segments
-	cfft_size_t M;   // length of one segment
-	cfft_complex_t * W_inv; // inverse frequency window function tabulated values
-	cfft_complex_t * w; // time window function tabulated values
+	cfft_complex_t *W_inv; // inverse frequency window function tabulated values
+	cfft_complex_t *w; // time window function tabulated values
   SIMDFPTYPE *w_dup;
-	cfft_complex_t * gamma_tilde; // temp buf for sampled and filtered data of size M_hat*k
-	cfft_complex_t * alpha_tilde; // another temp buf for permuted data of size M_hat*k
-	cfft_complex_t * beta_tilde; // another temp buf for permuted data of size M_hat*k
+	cfft_complex_t *gamma_tilde; // temp buf for sampled and filtered data of size M_hat*k
+	cfft_complex_t *alpha_tilde; // another temp buf for permuted data of size M_hat*k
+	cfft_complex_t *beta_tilde; // another temp buf for permuted data of size M_hat*k
   cfft_complex_t *alpha_ghost;
   int *delta, *epsilon;
+
 	cfft_size_t n_mu;
 	cfft_size_t d_mu; // d_mu should devide the input size
-	cfft_size_t M_hat; // length of one segment
-	double mu; // mu = n_mu/d_mu is the oversampling factor
 	cfft_size_t B;
   double tau; // a paramter controls the width of window function. The wider the width, the smaller truncation error becomes
   double sigma;
+
 	DFTI_DESCRIPTOR_HANDLE desc_dft_s;
 	DFTI_DESCRIPTOR_HANDLE desc_dft_m_hat;
 #ifdef USE_FFTW
@@ -277,10 +275,8 @@ typedef struct
 __declspec(noinline)
 void parallel_filter_subsampling(soi_desc_t * d, cfft_complex_t * alpha_dt);
 
-void init_soi_descriptor(soi_desc_t *d_ptr, MPI_Comm comm, cfft_size_t n, 
-						   cfft_size_t k, cfft_size_t n_mu, cfft_size_t d_mu, 
-						   cfft_size_t B,
-               int use_fftw, unsigned fftw_flags);
+void init_soi_descriptor(
+  soi_desc_t *d_ptr, MPI_Comm comm, cfft_size_t k, int use_fftw, unsigned fftw_flags);
 
 void compute_soi(soi_desc_t * d, cfft_complex_t *alpha_dt);
 void free_soi_descriptor(soi_desc_t * d);
@@ -292,29 +288,6 @@ double compute_snr(
   soi_desc_t *d);
 double compute_normalized_inf_norm(
   cfft_complex_t *output, size_t localLen, size_t offset, size_t globalLen, int kind);
-
-static void printv_pd(__m256d v, char *str)
-{
-  int i;
-  __declspec(align(64)) double tmp[4];
-  printf("%s:", str);
-  _mm256_store_pd(tmp, v);
-  for(i=0; i < 4; i++)
-    printf("[%d]=%g ", i, tmp[i]);
-  printf("\n");
-}
-
-static void printv_ps(__m256 v, char *str)
-{
-  int i;
-  __declspec(align(64)) float tmp[8];
-  printf("%s:", str);
-  _mm256_store_ps(tmp, v);
-  for(i=0; i < 8; i++)
-    printf("[%d]=%g ", i, tmp[i]);
-  printf("\n");
-}
-
 
 __declspec (align(64)) static unsigned long Remaining[5][4] = {
   { 0x00, 0x00, 0x00, 0x00 },

@@ -55,4 +55,26 @@
 
 #endif // PRECISION == 1
 
+static void printv_pd(__m256d v, char *str)
+{
+  int i;
+  __declspec(align(64)) double tmp[4];
+  printf("%s:", str);
+  _mm256_store_pd(tmp, v);
+  for(i=0; i < 4; i++)
+    printf("[%d]=%g ", i, tmp[i]);
+  printf("\n");
+}
+
+static void printv_ps(__m256 v, char *str)
+{
+  int i;
+  __declspec(align(64)) float tmp[8];
+  printf("%s:", str);
+  _mm256_store_ps(tmp, v);
+  for(i=0; i < 8; i++)
+    printf("[%d]=%g ", i, tmp[i]);
+  printf("\n");
+}
+
 #endif // _SOI_FFT_INTRINSIC_H_
