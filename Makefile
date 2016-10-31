@@ -26,9 +26,7 @@ EXE_EXT=exe
 OBJ_EXT=o
 SRCS = pfft.c parallel_filter_subsampling.c input.c cpu_freq.c compress.c
 TEST_SRCS = test.c $(SRCS)
-ACCURACY_SRCS = accuracy.c $(SRCS)
 OBJECTS = $(TEST_SRCS:.c=.$(OBJ_EXT))
-OBJECTS_ACCURACY = $(ACCURACY_SRCS:.c=.$(OBJ_EXT))
 
 all: test.exe
 
@@ -46,9 +44,6 @@ input.$(OBJ_EXT): input.c
 
 %.$(EXE_EXT): $(OBJECTS)
 	$(CC) $(CFLAGS) $(OBJECTS) -o $@ $(LDFLAGS)
-
-accuracy: $(OBJECTS_ACCURACY)
-	$(CC) $(CFLAGS) $(OBJECTS_ACCURACY) -o $@ $(LDFLAGS)	
 
 clean:
 	rm -f test.$(EXE_EXT) test_compress.exe $(OBJECTS)

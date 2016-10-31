@@ -24,8 +24,6 @@
 
 #define SOI_MEASURE_LOAD_IMBALANCE
 #define SOI_USE_INTRINSIC
-//#define SOI_USE_ALL_TO_ALL_SYNC
-//#define SOI_USE_ALL_TO_ALL_ASYNC
 
 #if PRECISION == 2
 #define VAL_TYPE double
@@ -181,7 +179,13 @@ if (MPI_SUCCESS != err) \
   printf("MPI error %lu in %s (%s, line %lu)\n", (unsigned long)err, __FUNCTION__, __FILE__, (unsigned long)__LINE__); \
 } while(0)
 
-#define ASSERT_DFTI(x) if (DFTI_NO_ERROR != x) printf("Dfti error while %s\n", #x)
+#define CHECK_DFTI(x) \
+  { \
+    MKL_LONG status = x; \
+    if (status && !DftiErrorClass(status, DFTI_NO_ERROR)) { \
+      fprintf(stderr, "Dfti error while %s: %s\n", #x, DftiErrorMessage(status)); \
+    } \
+  }
 
 #define MPI_TIMED_SECTION_BEGIN() { double __timing = -MPI_Wtime();
 #define MPI_TIMED_SECTION_END(c, x)            \
@@ -258,13 +262,7 @@ typedef struct
   unsigned fftw_flags;
   FFTW_PLAN fftw_plan_s, fftw_plan_m_hat;
 #endif
-#if !defined(USE_ALL_TO_ALL_SYNC) && !defined(SOI_USE_ALL_TO_ALL_ASYNC)
   MPI_Request *sendRequests, *recvRequests;
-#endif
-#ifdef SOI_USE_ALL_TO_ALL_ASYNC
-  pthread_t comm_thread;
-  sem_t sem_recv;
-#endif
   int use_vlc; // use variable length compression
   int *segmentBoundaries;
     // segmentBoundaries[i]: the first segment ith rank will process
@@ -276,8 +274,7 @@ void parallel_filter_subsampling(soi_desc_t *desc, cfft_complex_t * alpha_dt);
 
 void set_default_soi_descriptor(soi_desc_t *desc);
 
-void init_soi_descriptor(
-  soi_desc_t *desc, MPI_Comm comm, cfft_size_t k, int use_fftw, unsigned fftw_flags);
+void init_soi_descriptor(soi_desc_t *desc, MPI_Comm comm, cfft_size_t k);
 
 void compute_soi(soi_desc_t * d, cfft_complex_t *alpha_dt);
 void free_soi_descriptor(soi_desc_t * d);

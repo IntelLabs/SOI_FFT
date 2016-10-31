@@ -1,12 +1,15 @@
 #define _GNU_SOURCE
+
 #include <math.h>
 #include <stdio.h>
-#include <getopt.h>
-#include <omp.h>
 #include <stdlib.h>
+#include <getopt.h>
+
+#include <omp.h>
+
+#include <mkl_cdft.h>
 
 #include "soi.h"
-#include "mkl_cdft.h"
 
 /**
  * Command line options
@@ -99,8 +102,8 @@ static options parseArgs(int argc, char *argv[], soi_desc_t *desc)
 #ifdef SOI_USE_FFTW
     case 'w': ret.no_fftw = 1; break;
     case 'f': ret.fftw_out_file_name = optarg; break;
-    case 'F': ret.soi_with_fftw = 1; break;
-    case 't': ret.fftw_flags = FFTW_MEASURE; break;
+    case 'F': desc->use_fftw = 1; break;
+    case 't': desc->fftw_flags = FFTW_MEASURE; break;
 #endif
     case '?': break;
     default: exit(-1);
@@ -218,8 +221,8 @@ int main(int argc, char *argv[])
       if (!options.no_mkl) {
         if (1 == d.P) { // 1 mpi rank : use local FFT
           DFTI_DESCRIPTOR_HANDLE desc;
-          DftiCreateDescriptor(&desc, DFTI_TYPE, DFTI_COMPLEX, 1, d.N);
-          DftiCommitDescriptor(desc);
+          CHECK_DFTI( DftiCreateDescriptor(&desc, DFTI_TYPE, DFTI_COMPLEX, 1, d.N) );
+          CHECK_DFTI( DftiCommitDescriptor(desc) );
           if (NULL == in_buf) {
             size_t in_buf_size = sizeof(cfft_complex_t)*d.N*d.n_mu/d.d_mu;
             posix_memalign((void **)&in_buf, 4096, in_buf_size);
@@ -234,28 +237,16 @@ int main(int argc, char *argv[])
           mpiWriteFileSequentially(options.in_file_name, in_buf, d.N/d.P);
 
           time_mkl = -MPI_Wtime();
-          DftiComputeForward(desc, in_buf);
+          CHECK_DFTI( DftiComputeForward(desc, in_buf) );
           time_mkl += MPI_Wtime();
           MPI_DUMP_FLOAT(MPI_COMM_WORLD, time_mkl);
-          DftiFreeDescriptor(&desc);
+          CHECK_DFTI( DftiFreeDescriptor(&desc) );
         }
         else {
           MKL_LONG status, size;
-          status = DftiCreateDescriptorDM(MPI_COMM_WORLD, &desc, DFTI_TYPE, DFTI_COMPLEX, 1, d.N);
-          if (status && !DftiErrorClass(status, DFTI_NO_ERROR)) {
-            fprintf(stderr, "%s:%d %s\n", __FILE__, __LINE__, DftiErrorMessage(status));
-            return -1;
-          }
-          status = DftiGetValueDM(desc, CDFT_LOCAL_SIZE, &size);
-          if (status && !DftiErrorClass(status, DFTI_NO_ERROR)) {
-            fprintf(stderr, "%s:%d %s\n", __FILE__, __LINE__, DftiErrorMessage(status));
-            return -1;
-          }
-          status = DftiSetValueDM(desc, DFTI_PLACEMENT, DFTI_INPLACE);
-          if (status && !DftiErrorClass(status, DFTI_NO_ERROR)) {
-            fprintf(stderr, "%s:%d %s\n", __FILE__, __LINE__, DftiErrorMessage(status));
-            return -1;
-          }
+          CHECK_DFTI( DftiCreateDescriptorDM(MPI_COMM_WORLD, &desc, DFTI_TYPE, DFTI_COMPLEX, 1, d.N) );
+          CHECK_DFTI( DftiGetValueDM(desc, CDFT_LOCAL_SIZE, &size) );
+          CHECK_DFTI( DftiSetValueDM(desc, DFTI_PLACEMENT, DFTI_INPLACE) );
           if (NULL == in_buf) {
             size_t in_buf_size = sizeof(cfft_complex_t)*size*d.n_mu/d.d_mu*2;
             posix_memalign((void **)&in_buf, 4096, in_buf_size);
@@ -264,11 +255,7 @@ int main(int argc, char *argv[])
               return -1;
             }
           }
-          status = DftiCommitDescriptorDM(desc);
-          if (status && !DftiErrorClass(status, DFTI_NO_ERROR)) {
-            fprintf(stderr, "%s\n", DftiErrorMessage(status));
-            return -1;
-          }
+          CHECK_DFTI( DftiCommitDescriptorDM(desc) );
           populate_input(in_buf, d.N/d.P, d.rank*d.N/d.P, d.N, input);
 
           MPI_Barrier(MPI_COMM_WORLD);
@@ -277,11 +264,11 @@ int main(int argc, char *argv[])
 
           MPI_Barrier(MPI_COMM_WORLD);
           time_mkl = -MPI_Wtime();
-          DftiComputeForwardDM(desc, in_buf);
+          CHECK_DFTI( DftiComputeForwardDM(desc, in_buf) );
           MPI_Barrier(MPI_COMM_WORLD);
           time_mkl += MPI_Wtime();
           MPI_DUMP_FLOAT(MPI_COMM_WORLD, time_mkl);
-          DftiFreeDescriptorDM(&desc);
+          CHECK_DFTI( DftiFreeDescriptorDM(&desc) );
         }
 
         if (0 == d.rank)
@@ -383,7 +370,7 @@ int main(int argc, char *argv[])
       //////////////////////////////
       for (int soi_with_fftw = 0; soi_with_fftw <= options.soi_with_fftw; ++soi_with_fftw) {
         for (int k = options.k_min; k <= options.k_max && !options.no_soi; k *= 2) {
-          init_soi_descriptor(&d, MPI_COMM_WORLD, k, soi_with_fftw, options.fftw_flags);
+          init_soi_descriptor(&d, MPI_COMM_WORLD, k);
 
           cfft_size_t S = d.k*d.P; // total number of segments
           cfft_size_t M = d.N/S; // length of one segment, before oversampling
@@ -423,12 +410,14 @@ int main(int argc, char *argv[])
           free(d.w_dup); d.w_dup = NULL;
           free(d.W_inv); d.W_inv = NULL;
           free(d.alpha_ghost); d.alpha_ghost = NULL;
-          //free(d.alpha_tilde); d.alpha_tilde = NULL;
-          //free(d.gamma_tilde); d.gamma_tilde = NULL;
-          //free(d.beta_tilde); d.beta_tilde = NULL; // if we free these, iterating over m won't work
           if (d.use_vlc && d.epsilon) {
             free(d.epsilon); d.epsilon = NULL;
           }
+
+          // don't free the following buffers to reuse across multiple SOI FFT runs
+          d.alpha_tilde = NULL;
+          d.beta_tilde = NULL;
+          d.gamma_tilde = NULL;
 
           if (!options.no_snr) {
             int firstSegment = d.segmentBoundaries[d.rank];

@@ -296,10 +296,10 @@ double compute_snr(
     assert(d);
 
     DFTI_DESCRIPTOR_DM_HANDLE desc;
-    ASSERT_DFTI( DftiCreateDescriptorDM(MPI_COMM_WORLD, &desc, DFTI_TYPE, DFTI_COMPLEX, 1, globalLen) );
+    CHECK_DFTI( DftiCreateDescriptorDM(MPI_COMM_WORLD, &desc, DFTI_TYPE, DFTI_COMPLEX, 1, globalLen) );
 
     MKL_LONG size;
-    ASSERT_DFTI( DftiGetValueDM(desc, CDFT_LOCAL_SIZE, &size) );
+    CHECK_DFTI( DftiGetValueDM(desc, CDFT_LOCAL_SIZE, &size) );
     cfft_complex_t *tempBuf =
       (cfft_complex_t *)malloc(sizeof(cfft_complex_t)*size); // FIXME
     if (NULL == tempBuf) {
@@ -307,14 +307,14 @@ double compute_snr(
       exit(1);
     }
 
-    ASSERT_DFTI( DftiSetValueDM(desc, DFTI_PLACEMENT, DFTI_INPLACE) );
-    ASSERT_DFTI( DftiCommitDescriptorDM(desc) );
+    CHECK_DFTI( DftiSetValueDM(desc, DFTI_PLACEMENT, DFTI_INPLACE) );
+    CHECK_DFTI( DftiCommitDescriptorDM(desc) );
 
     populate_input(tempBuf, globalLen/d->P, d->rank*globalLen/d->P, globalLen, kind);
 
-    ASSERT_DFTI( DftiComputeForwardDM(desc, tempBuf) );
+    CHECK_DFTI( DftiComputeForwardDM(desc, tempBuf) );
 
-    ASSERT_DFTI( DftiFreeDescriptorDM(&desc) );
+    CHECK_DFTI( DftiFreeDescriptorDM(&desc) );
 
     // repartition data to match with SOI output
     cfft_size_t S = d->k*d->P;

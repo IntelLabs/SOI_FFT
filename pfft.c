@@ -1,13 +1,15 @@
 #define _GNU_SOURCE
-#include <sched.h>
+
 #include <limits.h>
 #include <assert.h>
-#include "soi.h"
-#include <mkl_trans.h>
-#include <mkl_types.h>
+#include <stdlib.h>
 #include <float.h>
+
 #include <omp.h>
-#include <mkl_service.h>
+
+#include <mkl.h>
+
+#include "soi.h"
 #include "compress.h"
 
 /*
@@ -17,8 +19,8 @@
 
 %--A high level description
 %The result space is divided in S segment of interest. Usually S is a
-%multiple of the number of processor P. Thus, if N is the original data
-%length, each segment is of length M = N/S. 
+%multiple of the number of processor P (specifically, S=P*k).
+%Thus, if N is the original data length, each segment is of length M = N/S. 
 %Denote the (global) input data by "alpha", a vector of lenght N,
 %the main idea of the algorithm is that corresponding to each segment s, 
 %s = 0, 1, ..., S-1, of the result, we construct a condensed input vector by 
@@ -35,29 +37,19 @@
 %1. Filter and Subsampling (algorithmically the most sophisticated part)
 %2. Straightforward DFT of length M_hat
 %3. Division by W, which is done by multiplication by 1/W.
-%
-
-%We mimic a cluster implementation here. But to aid testing, we maintain
-%the "global" version of key data, such as the complete input and the
-%complete "alpha_tilde" as well as "gamma_tilde"
-%We named the gloabal and distributed data with an obvious "glb" and "dt"
-%suffixes.
-%
 */
 
-// The best one found after solving the issue with SNR measurement.
-static cfft_size_t kappa;
-
-cfft_complex_t w_f(cfft_size_t i, cfft_size_t n, soi_desc_t *desc)
+static cfft_complex_t w_f(cfft_size_t i, const soi_desc_t *desc)
 {
   cfft_size_t S = desc->k*desc->P; // total number of segments
 	cfft_size_t M = desc->N/S;
 	cfft_size_t M_hat = desc->n_mu*M/desc->d_mu;
 
   cfft_size_t theta = i/(desc->B*S);
+  cfft_size_t kappa = desc->B - desc->d_mu;
   cfft_size_t j = i%(desc->B*S);
 
-  double t = ((double)theta/M_hat - (double)j/n + (double)kappa/(2*M))*M;
+  double t = ((double)theta/M_hat - (double)j/desc->N + (double)kappa/(2*M))*M;
   double y;
 
   if (t == 0) {
@@ -73,7 +65,7 @@ cfft_complex_t w_f(cfft_size_t i, cfft_size_t n, soi_desc_t *desc)
   return r*y/mu;
 }
 
-cfft_complex_t W_inv_f(cfft_size_t i, cfft_size_t n, soi_desc_t *desc)
+static cfft_complex_t W_inv_f(cfft_size_t i, const soi_desc_t *desc)
 {
   cfft_size_t S = desc->k*desc->P; // total number of segments
 	cfft_size_t M = desc->N/S;
@@ -82,13 +74,12 @@ cfft_complex_t W_inv_f(cfft_size_t i, cfft_size_t n, soi_desc_t *desc)
 
   double y = 1/(2*desc->tau)*(erfc(sqrt(desc->sigma)*(t - desc->tau/2)) - erfc(sqrt(desc->sigma)*(t + desc->tau/2)));
 
+  cfft_size_t kappa = desc->B - desc->d_mu;
   double delta = (double)kappa / (2*M);
   cfft_complex_t r = cosl(2*VERIFY_PI*delta*i) - I*sinl(2*VERIFY_PI*delta*i);
 
   return r/y;
 }
-
-static cfft_complex_t *g_gamma_tilde= NULL, *g_alpha_tilde = NULL, *g_beta_tilde = NULL;
 
 void set_default_soi_descriptor(soi_desc_t *desc)
 {
@@ -101,6 +92,14 @@ void set_default_soi_descriptor(soi_desc_t *desc)
 
   desc->use_vlc = 0;
   desc->comm_to_comp_cost_ratio = 1;
+#ifdef SOI_USE_FFTW
+  desc->use_fftw = 0;
+  desc->fftw_flags = FFTW_ESTIMATE;
+#endif
+
+  desc->alpha_tilde = NULL;
+  desc->beta_tilde = NULL;
+  desc->gamma_tilde = NULL;
 
 // The following parameters also can be used.
 // Pareto optimal points are marked with *.
@@ -138,13 +137,8 @@ void set_default_soi_descriptor(soi_desc_t *desc)
 // 1.5   | 0.0554   |  36.6513    | 22 | 235 *
 }
 
-void init_soi_descriptor(
-  soi_desc_t *d, MPI_Comm comm, cfft_size_t k, int use_fftw, unsigned fftw_flags)
+void init_soi_descriptor(soi_desc_t *d, MPI_Comm comm, cfft_size_t k)
 {
-	int rank, size;
-
-  kappa = d->B - d->d_mu;
-
 	d->comm = comm;
 	d->k = k;
   d->segmentBoundaries = (int *)malloc(sizeof(int)*(d->P + 1));
@@ -157,28 +151,25 @@ void init_soi_descriptor(
   posix_memalign((void **)&d->w, 4096, sizeof(cfft_complex_t)*d->B*S*d->n_mu);
   posix_memalign((void **)&d->w_dup, 4096, sizeof(SIMDFPTYPE)*d->B*S*d->n_mu);
   posix_memalign((void **)&d->W_inv, 4096, sizeof(cfft_complex_t)*M);
-  if (NULL == g_gamma_tilde) {
-    posix_memalign((void **)&g_gamma_tilde, 4096, sizeof(cfft_complex_t)*M_hat*k*2);
+  if (NULL == d->gamma_tilde) {
+    posix_memalign((void **)&d->gamma_tilde, 4096, sizeof(cfft_complex_t)*M_hat*k*2);
   }
-	d->gamma_tilde = g_gamma_tilde;
   if (NULL == d->gamma_tilde) {
     fprintf(stderr, "Failed to allocate d->gamma_tilde\n");
     exit(1);
   }
 
-  if (NULL == g_alpha_tilde) {
-    posix_memalign((void **)&g_alpha_tilde, 4096, sizeof(cfft_complex_t)*M_hat*k);
+  if (NULL == d->alpha_tilde) {
+    posix_memalign((void **)&d->alpha_tilde, 4096, sizeof(cfft_complex_t)*M_hat*k);
   }
-	d->alpha_tilde = g_alpha_tilde;
   if (NULL == d->alpha_tilde) {
     fprintf(stderr, "Failed to allocate d->alpha_tilde\n");
     exit(1);
   }
 
-  if (NULL == g_beta_tilde) {
-    posix_memalign((void **)&g_beta_tilde, 4096, sizeof(cfft_complex_t)*M_hat*k);
+  if (NULL == d->beta_tilde) {
+    posix_memalign((void **)&d->beta_tilde, 4096, sizeof(cfft_complex_t)*M_hat*k);
   }
-  d->beta_tilde = g_beta_tilde;
   if (NULL == d->beta_tilde) {
     fprintf(stderr, "Failed to allocate d->beta_tilde\n");
     exit(1);
@@ -202,7 +193,7 @@ void init_soi_descriptor(
       for (cfft_size_t j = 0; j < d->B; j++)
         for (cfft_size_t ii = i; ii < i + CACHE_LINE_LEN/2; ii++)
           (d->w)[i*d->B*d->n_mu + (j*d->n_mu + theta)*(CACHE_LINE_LEN/2) + ii - i] =
-            w_f(theta*d->B*S + j*S + ii, d->N, d);
+            w_f(theta*d->B*S + j*S + ii, d);
 
       for (cfft_size_t j = 0; j < d->B; j++) {
         for (cfft_size_t ii = 0; ii < 2; ii++) {
@@ -212,27 +203,15 @@ void init_soi_descriptor(
         }
       }
     }
-		/*for (cfft_size_t i=0; i<d->B; i++) {
-			for (cfft_size_t j=0; j<S; j++)
-				(d->w)[theta*d->B*S + i*S + j] = (d->w_f)(theta*d->B*S + i*S + j, d->N);
-
-      for (cfft_size_t j = 0; j < S/(SIMD_WIDTH/2)*(SIMD_WIDTH/2); j += SIMD_WIDTH/2) {
-        SIMDFPTYPE temp = _MM_LOADU((VAL_TYPE *)(d->w + theta*d->B*S + i*S + j));
-        _MM_STOREU(d->w_dup + (theta*d->B*S + i*S + j)*SIMD_WIDTH, _MM_MOVELDUP(temp));
-        _MM_STOREU(d->w_dup + (theta*d->B*S + i*S + j + 1)*SIMD_WIDTH, _MM_MOVEHDUP(temp));
-      }
-    }*/
 
 #pragma omp parallel for
 	for (cfft_size_t i=0; i < M; i++) {
-		(d->W_inv)[i] = W_inv_f(i, d->N, d);
+		(d->W_inv)[i] = W_inv_f(i, d);
   }
 
 	// create DFT descriptors
 #ifdef SOI_USE_FFTW
-  d->use_fftw = use_fftw;
-  d->fftw_flags = fftw_flags;
-  if (use_fftw) {
+  if (d->use_fftw) {
     FFTW_PLAN_WITH_NTHREADS(omp_get_max_threads());
     d->fftw_plan_s = FFTW_PLAN_DFT_1D(
       S, d->gamma_tilde, d->gamma_tilde, FFTW_FORWARD, fftw_flags);
@@ -242,19 +221,12 @@ void init_soi_descriptor(
   else
 #endif
   {
-    ASSERT_DFTI( DftiCreateDescriptor(&(d->desc_dft_s), DFTI_TYPE, DFTI_COMPLEX, 1, (long)S) );
-    ASSERT_DFTI( DftiSetValue(d->desc_dft_s, DFTI_NUMBER_OF_USER_THREADS, omp_get_max_threads()) );
-    //ASSERT_DFTI( DftiSetValue(d->desc_dft_s, DFTI_NUMBER_OF_TRANSFORMS, 8) );
-    //ASSERT_DFTI( DftiSetValue(d->desc_dft_s, DFTI_INPUT_DISTANCE, S) );
-    //ASSERT_DFTI( DftiSetValue(d->desc_dft_s, DFTI_OUTPUT_DISTANCE, S) );
-    ASSERT_DFTI( DftiCommitDescriptor(d->desc_dft_s) );
-    ASSERT_DFTI( DftiCreateDescriptor(&(d->desc_dft_m_hat), DFTI_TYPE, DFTI_COMPLEX, 1, (long)(M_hat)) );
-    MKL_LONG status = DftiCommitDescriptor(d->desc_dft_m_hat);
-    if (status & !DftiErrorClass(status, DFTI_NO_ERROR))
-      fprintf(stderr, "%s\n", DftiErrorMessage(status));
+    CHECK_DFTI( DftiCreateDescriptor(&(d->desc_dft_s), DFTI_TYPE, DFTI_COMPLEX, 1, (long)S) );
+    CHECK_DFTI( DftiSetValue(d->desc_dft_s, DFTI_NUMBER_OF_USER_THREADS, omp_get_max_threads()) );
+    CHECK_DFTI( DftiCommitDescriptor(d->desc_dft_s) );
+    CHECK_DFTI( DftiCreateDescriptor(&(d->desc_dft_m_hat), DFTI_TYPE, DFTI_COMPLEX, 1, (long)(M_hat)) );
+    CHECK_DFTI( DftiCommitDescriptor(d->desc_dft_m_hat) );
   }
-
-  if (0 == d->rank) printf("freq = %f\n", get_cpu_freq());
 }
 
 void free_soi_descriptor(soi_desc_t * d)
@@ -269,8 +241,8 @@ void free_soi_descriptor(soi_desc_t * d)
   else
 #endif
   {
-    ASSERT_DFTI( DftiFreeDescriptor(&(d->desc_dft_s)) );
-    ASSERT_DFTI( DftiFreeDescriptor(&(d->desc_dft_m_hat)) );
+    CHECK_DFTI( DftiFreeDescriptor(&(d->desc_dft_s)) );
+    CHECK_DFTI( DftiFreeDescriptor(&(d->desc_dft_m_hat)) );
   }
 
   // free requests
@@ -282,9 +254,10 @@ void free_soi_descriptor(soi_desc_t * d)
 	if (d->w) free(d->w);
 	if (d->w_dup) free(d->w_dup);
 	if (d->W_inv) free(d->W_inv);
-	//free(d->alpha_tilde);
 	if (d->alpha_ghost) free(d->alpha_ghost);
-  //if (d->gamma_tilde) free(d->gamma_tilde); d->gamma_tilde = NULL;
+	if (d->alpha_tilde) free(d->alpha_tilde); d->alpha_tilde = NULL;
+  if (d->beta_tilde) free(d->beta_tilde); d->beta_tilde = NULL;
+  if (d->gamma_tilde) free(d->gamma_tilde); d->gamma_tilde = NULL;
   if (d->use_vlc) {
     if (d->epsilon) free(d->epsilon); d->epsilon = NULL;
   }
@@ -297,8 +270,6 @@ unsigned long long load_imbalance_times[MAX_THREADS];
 
 double time_begin_mpi, time_end_mpi;
 double time_begin_fused[1024], time_end_fused[1024];
-
-void mpiWriteFileSequentially(char *fileName, cfft_complex_t *buffer, size_t len);
 
 void compute_soi(soi_desc_t * d, cfft_complex_t *alpha_dt)
 {
@@ -498,6 +469,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
 
   time_begin_mpi = MPI_Wtime() - soiBeginTime;
 
+  // for each segment
   for (cfft_size_t ik = 0; ik < MAX(maxNSegment, numOfSegToReceive); ik++) {
     if (d->use_vlc) {
       time_mpi -= MPI_Wtime();
@@ -570,7 +542,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
     else {
       time_mpi -= MPI_Wtime();
 
-#ifdef USE_I_ALL_TO_ALL
+#ifdef SOI_USE_I_ALL_TO_ALL
       CFFT_ASSERT_MPI(MPI_Ialltoallv(
         d->alpha_tilde + ik*l, sCnts, sDispls, MPI_TYPE,
         d->gamma_tilde + ik*d->P*l, sCnts, rDispls, MPI_TYPE,
@@ -626,7 +598,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
 	for (cfft_size_t ik = 0; ik < numOfSegToReceive; ik++)
 	{
     temp_time = MPI_Wtime();
-#ifdef USE_I_ALL_TO_ALL
+#ifdef SOI_USE_I_ALL_TO_ALL
     assert(!d->use_vlc); // i_all_to_all doesn't work with vlc
     CFFT_ASSERT_MPI(MPI_Wait(d->recvRequests + ik, MPI_STATUS_IGNORE));
 #else
@@ -656,13 +628,6 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
       }
       time_decompress += MPI_Wtime() - t_decompress;
     }
-
-    /*if (3 == ik) {
-      mpiWriteFileSequentially(
-        "segment_3.out",
-        d->gamma_tilde + ik*M_hat,
-        M_hat);
-    }*/
 
     temp_time = MPI_Wtime();
 #ifdef SOI_USE_FFTW
@@ -748,9 +713,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fused");
       "\ttime_fused_mpi = %f\ttime_decompress = %f\ttime_fused_fft = %f\ttime_fused_vmul = %f\n",
       time_fused_mpi, time_decompress, time_fused_fft, time_fused_vmul);
   }
-#ifndef USE_I_ALL_TO_ALL
+#ifndef SOI_USE_I_ALL_TO_ALL
   CFFT_ASSERT_MPI(MPI_Waitall(d->P*d->k, d->sendRequests, MPI_STATUSES_IGNORE));
 #endif
-  //omp_set_num_threads(omp_get_max_threads() + 1);
-  //printf("%d\n", omp_get_max_threads());
 }
