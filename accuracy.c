@@ -24,7 +24,7 @@ typedef struct options {
   int no_mkl, no_soi, no_snr;
   char *mkl_out_file_name;
   char *soi_out_file_name;
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
   int no_fftw;
   char *fftw_out_file_name;
 #endif
@@ -44,7 +44,7 @@ static options parseArgs(int argc, char *argv[])
   ret.soi_out_file_name = NULL;
   ret.soi_with_fftw = 0;
   ret.iteration = 1;
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
   ret.no_fftw = 0;
   ret.fftw_out_file_name = NULL;
   ret.fftw_flags = FFTW_ESTIMATE;
@@ -67,7 +67,7 @@ static options parseArgs(int argc, char *argv[])
       { "mkl_out_file", required_argument, 0, 'm' },
       { "soi_out_file", required_argument, 0, 's' },
       { "iteration", required_argument, 0, 'N' },
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
       { "no_fftw", no_argument, 0, 'w' },
       { "fftw_out_file", required_argument, 0, 'f' },
       { "soi_with_fftw", no_argument, 0, 'F' },
@@ -96,7 +96,7 @@ static options parseArgs(int argc, char *argv[])
     case 'm': ret.mkl_out_file_name = optarg; break;
     case 's': ret.soi_out_file_name = optarg; break;
     case 'N': ret.iteration = atoi(optarg); break;
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
     case 'w': ret.no_fftw = 1; break;
     case 'f': ret.fftw_out_file_name = optarg; break;
     case 'F': ret.soi_with_fftw = 1; break;
@@ -182,7 +182,7 @@ int main(int argc, char *argv[])
   DFTI_DESCRIPTOR_HANDLE mklDesc;
   DFTI_DESCRIPTOR_DM_HANDLE mklDmDesc;
 
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
   FFTW_PLAN fftwPlan;
 #endif
 
@@ -218,7 +218,7 @@ int main(int argc, char *argv[])
     }
   }
 
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
   if (!options.no_fftw) {
     if (1 == P) {
       FFTW_PLAN_WITH_NTHREADS(omp_get_max_threads());
@@ -240,7 +240,7 @@ int main(int argc, char *argv[])
 
   int k = 8;
   double mklSnrMin = 65535, mklSnrMax = 0, mklSnrSum = 0;
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
   double fftwSnrMin = 65535, fftwSnrMax = 0, fftwSnrSum = 0;
 #endif
   for (int i = 0; i < options.iteration; i++) {
@@ -269,7 +269,7 @@ int main(int argc, char *argv[])
       if (0 == PID) printf("mkl %lf\n", snr);
     }
 
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
     if (!options.no_fftw) {
       if (1 == P) FFTW_EXECUTE(fftwPlan);
       else FFTW_MPI_EXECUTE_DFT(fftwPlan, fftwBuf, fftwBuf);
@@ -287,7 +287,7 @@ int main(int argc, char *argv[])
     printf(
       "mkl avg %lf min %lf max %lf\n",
       mklSnrSum/options.iteration, mklSnrMin, mklSnrMax);
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
     printf(
       "fftw avg %lf min %lf max %lf\n",
       fftwSnrSum/options.iteration, fftwSnrMin, fftwSnrMax);
@@ -299,7 +299,7 @@ int main(int argc, char *argv[])
     else DftiFreeDescriptorDM(&mklDmDesc);
   }
 
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
   if (!options.no_fftw) {
     FFTW_DESTROY_PLAN(fftw_plan);
     FFTW_CLEANUP_THREADS();

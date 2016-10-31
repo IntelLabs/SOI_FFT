@@ -16,23 +16,23 @@
 #include <immintrin.h>
 #include "mkl_dfti.h"
 
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
 #include <fftw3-mpi.h>
 #endif
 
 #include "intrinsic.h"
 
-#define MEASURE_LOAD_IMBALANCE
-#define INTRINSIC
-//#define USE_ALL_TO_ALL_SYNC
-//#define USE_ALL_TO_ALL_ASYNC
+#define SOI_MEASURE_LOAD_IMBALANCE
+#define SOI_USE_INTRINSIC
+//#define SOI_USE_ALL_TO_ALL_SYNC
+//#define SOI_USE_ALL_TO_ALL_ASYNC
 
 #if PRECISION == 2
 #define VAL_TYPE double
 #define DFTI_TYPE DFTI_DOUBLE
 #define MPI_TYPE MPI_DOUBLE
 
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
 #define FFTW_COMPLEX fftw_complex
 #define FFTW_PLAN_WITH_NTHREADS fftw_plan_with_nthreads
 #define FFTW_PLAN fftw_plan
@@ -58,7 +58,7 @@
 #define DFTI_TYPE DFTI_SINGLE
 #define MPI_TYPE MPI_FLOAT
 
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
 #define FFTW_COMPLEX fftwf_complex
 #define FFTW_PLAN_WITH_NTHREADS fftwf_plan_with_nthreads
 #define FFTW_PLAN fftwf_plan
@@ -122,8 +122,7 @@ row7 = _mm256_permute2f128_ps(__tt3, __tt7, 0x31);
 
 #define TRANSPOSE_BLOCK_SIZE CACHE_LINE_LEN
 
-//#define USE_CDOT 1
-#if defined(_DEBUG)
+#ifndef NDEBUG
 #define DUMP(x) printf("%s\n", x)
 #define DUMP_INT(x) printf("%s = %d\n", #x, x)
 #define DUMP_FLOAT(x) printf("%s = %f\n", #x, x)
@@ -246,23 +245,23 @@ typedef struct
   cfft_complex_t *alpha_ghost;
   int *delta, *epsilon;
 
-	cfft_size_t n_mu;
-	cfft_size_t d_mu; // d_mu should devide the input size
+	int n_mu;
+	int d_mu; // d_mu should devide the input size
 	cfft_size_t B;
   double tau; // a paramter controls the width of window function. The wider the width, the smaller truncation error becomes
   double sigma;
 
 	DFTI_DESCRIPTOR_HANDLE desc_dft_s;
 	DFTI_DESCRIPTOR_HANDLE desc_dft_m_hat;
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
   int use_fftw;
   unsigned fftw_flags;
   FFTW_PLAN fftw_plan_s, fftw_plan_m_hat;
 #endif
-#if !defined(USE_ALL_TO_ALL_SYNC) && !defined(USE_ALL_TO_ALL_ASYNC)
+#if !defined(USE_ALL_TO_ALL_SYNC) && !defined(SOI_USE_ALL_TO_ALL_ASYNC)
   MPI_Request *sendRequests, *recvRequests;
 #endif
-#ifdef USE_ALL_TO_ALL_ASYNC
+#ifdef SOI_USE_ALL_TO_ALL_ASYNC
   pthread_t comm_thread;
   sem_t sem_recv;
 #endif
@@ -273,10 +272,12 @@ typedef struct
 } soi_desc_t;
 
 __declspec(noinline)
-void parallel_filter_subsampling(soi_desc_t * d, cfft_complex_t * alpha_dt);
+void parallel_filter_subsampling(soi_desc_t *desc, cfft_complex_t * alpha_dt);
+
+void set_default_soi_descriptor(soi_desc_t *desc);
 
 void init_soi_descriptor(
-  soi_desc_t *d_ptr, MPI_Comm comm, cfft_size_t k, int use_fftw, unsigned fftw_flags);
+  soi_desc_t *desc, MPI_Comm comm, cfft_size_t k, int use_fftw, unsigned fftw_flags);
 
 void compute_soi(soi_desc_t * d, cfft_complex_t *alpha_dt);
 void free_soi_descriptor(soi_desc_t * d);
@@ -313,7 +314,7 @@ static const double PI=3.14159265358979323846;
 
 #define MAX_THREADS 512
 
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
 extern unsigned long long load_imbalance_times[MAX_THREADS];
 
 #ifdef __cplusplus

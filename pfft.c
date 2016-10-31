@@ -90,6 +90,54 @@ cfft_complex_t W_inv_f(cfft_size_t i, cfft_size_t n, soi_desc_t *desc)
 
 static cfft_complex_t *g_gamma_tilde= NULL, *g_alpha_tilde = NULL, *g_beta_tilde = NULL;
 
+void set_default_soi_descriptor(soi_desc_t *desc)
+{
+  // The default parameters
+  desc->n_mu = 5;
+  desc->d_mu = 4;
+  desc->tau = 928/1024.; // divide with a power of 2 to be exact in binary representation
+  desc->sigma = 373.7314;
+  desc->B = 72;
+
+  desc->use_vlc = 0;
+  desc->comm_to_comp_cost_ratio = 1;
+
+// The following parameters also can be used.
+// Pareto optimal points are marked with *.
+// Overall, given the same mu (oversampling factor), higher B gives higher
+// accuracy and we should also increase tau and sigma together
+// With higher mu, we can get a similar accuracy with smaller B. This basically
+// trade-offs more communication for less computation
+
+// mu    | tau      | sigma       | B  | SNR (dB)
+// 1.25  | 872/1024 | 313.1715    | 76 | 289.2718 *
+// 1.25  | 928/1024 | 373.7314    | 72 | 288.1844 *
+// 1.25  | 818/1024 | 267.4513    | 64 | 284.7614 *
+// 1.25  | 0.899    | 352.7647081 | 60 | 282 *
+// 1.25  | 764/1024 | 213.2893    | 60 | 275.246
+// 1.25  | 709/1024 | 201.8235    | 56 | 266.6957 *
+// 1.25  | 0.782    | 245.8927353 | 54 | 259 *
+// 1.25  | 652/1024 | 176.9743    | 54 | 258.2814
+// 1.25  | 591/1024 | 154.7071    | 50 | 247.7459
+// 1.25  | 512/1024 | 121.0936    | 44 | 241.8972 *
+// 1.25  | 0.664    | 182.5254421 | 46 | 239
+// 1.25  | 0.578    | 155.3322    | 44 | 233
+// 1.25  | 0.531    | 136.5983707 | 41 | 220 *
+// 1.25  | 383/1024 | 104.1262    | 42 | 219.777
+// 1.25  | 0.4476   | 119.2272    | 38 | 213 *
+// 1.25  | 299/1024 |  90.5391    | 38 | 210.1298
+// 1.25  | 0.373    | 102.1115361 | 36 | 200 *
+// 1.25  | 0.2927   |  90.7306    | 32 | 193 *
+// 1.25  | 0.154    |  73.2102363 | 30 | 179 *
+
+// 1.125 | 0.7238   | 476.8683    | 76 | 213 *
+// 1.125 | 0.6476   | 363.891     | 66 | 193 *
+
+// 1.5   | 931/1024 | 109.0712    | 36 | 289.6294 *
+// 1.5   | 832/1024 |  93.4329    | 38 | 289.4688
+// 1.5   | 0.0554   |  36.6513    | 22 | 235 *
+}
+
 void init_soi_descriptor(
   soi_desc_t *d, MPI_Comm comm, cfft_size_t k, int use_fftw, unsigned fftw_flags)
 {
@@ -181,7 +229,7 @@ void init_soi_descriptor(
   }
 
 	// create DFT descriptors
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
   d->use_fftw = use_fftw;
   d->fftw_flags = fftw_flags;
   if (use_fftw) {
@@ -212,7 +260,7 @@ void init_soi_descriptor(
 void free_soi_descriptor(soi_desc_t * d)
 {
 	// free DFT descriptors
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
   if (d->use_fftw) {
     FFTW_DESTROY_PLAN(d->fftw_plan_s);
     FFTW_DESTROY_PLAN(d->fftw_plan_m_hat);
@@ -243,7 +291,7 @@ void free_soi_descriptor(soi_desc_t * d)
   if (d->segmentBoundaries) free(d->segmentBoundaries); d->segmentBoundaries = NULL;
 }
 
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
 unsigned long long load_imbalance_times[MAX_THREADS];
 #endif
 
@@ -273,7 +321,7 @@ void compute_soi(soi_desc_t * d, cfft_complex_t *alpha_dt)
 */
 MPI_TIMED_SECTION_BEGIN();
 	parallel_filter_subsampling(d, alpha_dt);
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
 MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "time_fss_total");
   if (0 == d->rank) {
     double min = DBL_MAX, max = DBL_MIN;
@@ -326,7 +374,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
         printf("%d ", globalMaxExponentReduced[s]);
       }
       printf("\n%d\n", totalMaxExponent);
-      printf("l = %d\n", l);
+      printf("l = %ld\n", l);
     }
 
   } // use_vlc
@@ -570,7 +618,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
   time_fused = MPI_Wtime();
   time_end_mpi = time_fused - soiBeginTime;
 
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
   for (int i = 0; i < omp_get_max_threads(); i++)
     load_imbalance_times[i] = 0;
 #endif
@@ -617,7 +665,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
     }*/
 
     temp_time = MPI_Wtime();
-#ifdef USE_FFTW
+#ifdef SOI_USE_FFTW
     if (d->use_fftw)
       FFTW_EXECUTE_DFT(
         d->fftw_plan_m_hat, d->gamma_tilde + ik*M_hat, d->gamma_tilde + ik*M_hat);
@@ -631,7 +679,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
     //if (0 == d->rank) printf("\ttime_fused_fft = %f\n", t2 - temp_time);
     time_fused_fft += t2 - temp_time;
 
-#if defined(INTRINSIC)
+#ifdef SOI_USE_INTRINSIC
 #pragma omp parallel
     {
 #pragma omp for
@@ -644,7 +692,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
       _MM_STREAM((VAL_TYPE *)(alpha_dt + ik*M + i), temp);
     }
 
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
     unsigned long long t = __rdtsc();
 #pragma omp barrier
     load_imbalance_times[omp_get_thread_num()] += __rdtsc() - t;
@@ -669,7 +717,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
     for (cfft_size_t i = 0; i < M; i++)
       alpha_dt[ik*M + i] = d->W_inv[i]*d->gamma_tilde[ik*M_hat + i];
 
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
     unsigned long long t = __rdtsc();
 #pragma omp barrier
     load_imbalance_times[omp_get_thread_num()] += __rdtsc() - t;
@@ -681,7 +729,7 @@ MPI_TIMED_SECTION_END(d->comm, "time_fss_total");
     time_end_fused[ik] = MPI_Wtime() - soiBeginTime;
 	} // for each segment
 
-/*#ifdef MEASURE_LOAD_IMBALANCE
+/*#ifdef SOI_MEASURE_LOAD_IMBALANCE
   if (0 == d->rank) {
     printf("time_fused\t%f", MPI_Wtime() - time_fused);
     double min = DBL_MAX, max = DBL_MIN;

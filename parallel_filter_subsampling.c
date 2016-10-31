@@ -108,7 +108,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
   unsigned long long conv_clks = 0, fft_clks = 0, transpose_clks = 0;
   int nthreads = omp_get_max_threads();
 
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
   for (int i = 0; i < omp_get_max_threads(); i++)
     load_imbalance_times[i] = 0;
 #endif
@@ -117,7 +117,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #define N_MU 5
 #define THETA_UNROLL_FACTOR N_MU
 
-  size_t num_thread_groups = MIN(S/(CACHE_LINE_LEN/2), 8);
+  int num_thread_groups = MIN(S/(CACHE_LINE_LEN/2), 8);
   if (0 == rank && nthreads < num_thread_groups) {
     fprintf(stderr, "OMP_NUM_THREADS should be greater than equal to %d. Consider increasing OMP_NUM_THREADS or decreasing k\n", num_thread_groups);
     exit(-1);
@@ -425,7 +425,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 		} // for (cfft_size_t theta=0; theta<n_mu; theta++)
   } // for (cfft_size_t j = K_0/J_UNROLL_FACTOR*J_UNROLL_FACTOR; j += J_UNROLL_FACTOR)
 
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
   unsigned long long t = __rdtsc();
 #pragma omp barrier
   load_imbalance_times[threadid] += __rdtsc() - t;
@@ -567,7 +567,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
   unsigned long long conv_clks = 0, fft_clks = 0, transpose_clks = 0;
   int nthreads = omp_get_max_threads();
 
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
   for (int i = 0; i < omp_get_max_threads(); i++)
     load_imbalance_times[i] = 0;
 #endif
@@ -578,7 +578,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #undef THETA_UNROLL_FACTOR
 #define THETA_UNROLL_FACTOR N_MU
 
-  size_t num_thread_groups = MIN(S/(CACHE_LINE_LEN/2), 8);
+  int num_thread_groups = MIN(S/(CACHE_LINE_LEN/2), 8);
   if (0 == rank && nthreads < num_thread_groups) {
     fprintf(stderr, "OMP_NUM_THREADS should be greater than equal to %d. Consider increasing OMP_NUM_THREADS or decreasing k\n", num_thread_groups);
     exit(-1);
@@ -886,7 +886,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 		} // for (cfft_size_t theta=0; theta<n_mu; theta++)
   } // for (cfft_size_t j = K_0/J_UNROLL_FACTOR*J_UNROLL_FACTOR; j += J_UNROLL_FACTOR)
 
-#ifdef MEASURE_LOAD_IMBALANCE
+#ifdef SOI_MEASURE_LOAD_IMBALANCE
   unsigned long long t = __rdtsc();
 #pragma omp barrier
   load_imbalance_times[threadid] += __rdtsc() - t;
