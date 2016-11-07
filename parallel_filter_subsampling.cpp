@@ -49,8 +49,8 @@
 
 extern double get_cpu_freq();
 
-__declspec(noinline)
-void parallel_filter_subsampling_n_mu_5(soi_desc_t * d, cfft_complex_t * alpha_dt)
+template<int N_MU = 5, int D_MU = 4>
+void parallel_filter_subsampling(soi_desc_t * d, cfft_complex_t * alpha_dt)
 {
   cfft_complex_t *gamma_tilde_dt = d->gamma_tilde;
   cfft_complex_t *w = d->w;
@@ -116,9 +116,8 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
     load_imbalance_times[i] = 0;
 #endif
 
-#define J_UNROLL_FACTOR 2
-#define N_MU 5
-#define THETA_UNROLL_FACTOR N_MU
+  const int J_UNROLL_FACTOR = 2;
+  const int THETA_UNROLL_FACTOR = N_MU;
 
   int num_thread_groups = MIN(S/(CACHE_LINE_LEN/2), 8);
   if (0 == rank && nthreads < num_thread_groups) {
@@ -166,99 +165,107 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
       input_buffer[2*k + 1] = _MM_LOAD((VAL_TYPE *)(alpha_dt + (j_begin*d_mu + k)*S + i) + SIMD_WIDTH);
     }
 
-    /*if (0 == rank && 0 == threadid) {
-      for (int j = 0; j < B - d_mu; ++j) {
-        cfft_complex_t c = alpha_dt[(j_begin*d_mu + j)*S];
-        printf("(%g %g) ", __real__(c), __imag__(c));
+    for (cfft_size_t j0 = j_begin; j0 < j_end; j0 += J_UNROLL_FACTOR) {
+
+#pragma unroll(D_MU*J_UNROLL_FACTOR)
+      for (int k = 0; k < D_MU*J_UNROLL_FACTOR; ++k) {
+        input_buffer[(input_buffer_ptr + B - d_mu + k)%input_buffer_len*2] =
+          _MM_LOAD((VAL_TYPE *)(alpha_dt + (j0*d_mu + B - d_mu + k)*S + i));
+        input_buffer[(input_buffer_ptr + B - d_mu + k)%input_buffer_len*2 + 1] =
+          _MM_LOAD((VAL_TYPE *)(alpha_dt + (j0*d_mu + B - d_mu + k)*S + i) + SIMD_WIDTH);
+        //_MM_PREFETCH1(alpha_dt + (j0*d_mu + B + k)*S + i);
       }
-      printf("\n");
-    }*/
 
-    for (cfft_size_t j = j_begin; j < j_end; j += J_UNROLL_FACTOR) {
+      cfft_complex_t *v_tmp = gamma_tilde_dt + S*j0*N_MU + i;
 
-// N_MU = 5, D_MU = 4
-#define D_MU_TIMES_J_UNROLL_FACTOR 8
-
-#define LOAD_INPUT_TO_BUFFER(z, k, dummy) \
-      input_buffer[(input_buffer_ptr + B - d_mu + k)%input_buffer_len*2] = \
-        _MM_LOAD((VAL_TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i)); \
-      input_buffer[(input_buffer_ptr + B - d_mu + k)%input_buffer_len*2 + 1] = \
-        _MM_LOAD((VAL_TYPE *)(alpha_dt + (j*d_mu + B - d_mu + k)*S + i) + SIMD_WIDTH);
-      //_MM_PREFETCH1(alpha_dt + (j*d_mu + B + k)*S + i);
-
-      BOOST_PP_REPEAT(D_MU_TIMES_J_UNROLL_FACTOR, LOAD_INPUT_TO_BUFFER, dummy)
-      cfft_complex_t *v_tmp = gamma_tilde_dt + S*j*N_MU + i;
-
-      /*if (0 == rank && 0 == threadid) {
-        for (int k = 0; k < B; ++k) {
-          cfft_complex_t c = ((cfft_complex_t *)(input_buffer + (input_buffer_ptr + k)%input_buffer_len*2))[0];
-          printf("(%g %g) ", __real__(c), __imag__(c));
-        }
-        printf("\n");
-      }*/
-
-      for (cfft_size_t theta = 0; theta < N_MU; theta += THETA_UNROLL_FACTOR) {
+      for (cfft_size_t theta_0 = 0; theta_0 < N_MU; theta_0 += THETA_UNROLL_FACTOR) {
 
       SIMDFPTYPE *in = d->w_dup + i*B*N_MU;
 
-#define DEFINE_XL_XH_I_THETA(z, i_arg, theta_arg) \
-      SIMDFPTYPE xl##theta_arg##i_arg, xh##theta_arg##i_arg;
-#define DEFINE_XL_XH(z, theta_arg, dummy) BOOST_PP_REPEAT(2, DEFINE_XL_XH_I_THETA, theta_arg)
-      BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, DEFINE_XL_XH, dummy);
+      SIMDFPTYPE xl[THETA_UNROLL_FACTOR][2], xh[THETA_UNROLL_FACTOR][2];
 
       cfft_size_t kkk = 0;
-#define LOAD_XL_XH_I_THETA(z, i_arg, theta_arg) \
-      xl##theta_arg##i_arg = _MM_LOAD(in + (kkk*N_MU + theta + theta_arg)*(CACHE_LINE_LEN/2) + i_arg*2); \
-      xh##theta_arg##i_arg = _MM_LOAD(in + (kkk*N_MU + theta + theta_arg)*(CACHE_LINE_LEN/2) + i_arg*2 + 1);
-#define LOAD_XL_XH(z, theta_arg, dummy) BOOST_PP_REPEAT(2, LOAD_XL_XH_I_THETA, theta_arg)
-      BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, LOAD_XL_XH, dummy);
+#pragma unroll(THETA_UNROLL_FACTOR)
+      for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
+        xl[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2); \
+        xh[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2 + 1);
 
-#define LOAD_YTEMP_I_J(z, i_arg, j_arg) \
-      SIMDFPTYPE ytemp##j_arg##i_arg = _MM_LOAD( \
-        input_buffer + (input_buffer_ptr + j_arg*d_mu + kkk)%input_buffer_len*2 + i_arg);
-#define LOAD_YTEMP(z, j_arg, dummy) BOOST_PP_REPEAT(2, LOAD_YTEMP_I_J, j_arg)
-      BOOST_PP_REPEAT(J_UNROLL_FACTOR, LOAD_YTEMP, dummy);
-
-#define COMPLEX_MUL_J_THETA(z, theta_arg, j_arg) \
-      SIMDFPTYPE temp##j_arg##theta_arg##0 = _MM_FMADDSUB( \
-        xl##theta_arg##0, ytemp##j_arg##0, \
-        _MM_SWAP_REAL_IMAG(_MM_MUL(xh##theta_arg##0, ytemp##j_arg##0))); \
-      SIMDFPTYPE temp##j_arg##theta_arg##1 = _MM_FMADDSUB( \
-        xl##theta_arg##1, ytemp##j_arg##1, \
-        _MM_SWAP_REAL_IMAG(_MM_MUL(xh##theta_arg##1, ytemp##j_arg##1)));
-#define COMPLEX_MUL_J(z, j_arg, dummy) BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, COMPLEX_MUL_J_THETA, j_arg)
-      BOOST_PP_REPEAT(J_UNROLL_FACTOR, COMPLEX_MUL_J, dummy);
-
-      for (kkk = 1; kkk < B; kkk++) {
-        BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, LOAD_XL_XH, dummy)
-
-        BOOST_PP_REPEAT(J_UNROLL_FACTOR, LOAD_YTEMP, dummy);
-
-#define COMPLEX_FMA_J_THETA(z, theta_arg, j_arg) \
-        temp##j_arg##theta_arg##0 = _MM_ADD( \
-          temp##j_arg##theta_arg##0, \
-          _MM_FMADDSUB( \
-            xl##theta_arg##0, ytemp##j_arg##0, \
-            _MM_SWAP_REAL_IMAG(_MM_MUL(xh##theta_arg##0, ytemp##j_arg##0)))); \
-        temp##j_arg##theta_arg##1 = _MM_ADD( \
-          temp##j_arg##theta_arg##1, \
-          _MM_FMADDSUB( \
-            xl##theta_arg##1, ytemp##j_arg##1, \
-            _MM_SWAP_REAL_IMAG(_MM_MUL(xh##theta_arg##1, ytemp##j_arg##1))));
-#define COMPLEX_FMA_J(z, j_arg, dummy) \
-        BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, COMPLEX_FMA_J_THETA, j_arg)
-        BOOST_PP_REPEAT(J_UNROLL_FACTOR, COMPLEX_FMA_J, dummy);
+        xl[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2); \
+        xh[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2 + 1);
       }
 
-#define STORE_TEMP_J_THETA(z, theta_arg, j_arg) \
-      _MM_STREAM( \
-        (VAL_TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)), \
-        temp##j_arg##theta_arg##0); \
-      _MM_STREAM( \
-        (VAL_TYPE *)(v_tmp + S*(j_arg*N_MU + theta + theta_arg)) + SIMD_WIDTH, \
-        temp##j_arg##theta_arg##1);
-#define STORE_TEMP_J(z, j_arg, dummy) BOOST_PP_REPEAT(THETA_UNROLL_FACTOR, STORE_TEMP_J_THETA, j_arg)
-      BOOST_PP_REPEAT(J_UNROLL_FACTOR, STORE_TEMP_J, dummy);
+      SIMDFPTYPE temp[J_UNROLL_FACTOR][THETA_UNROLL_FACTOR][2];
+      SIMDFPTYPE ytemp[J_UNROLL_FACTOR][2];
+
+#pragma unroll(J_UNROLL_FACTOR)
+      for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
+        ytemp[j][0] = _MM_LOAD(
+          input_buffer + (input_buffer_ptr + j*d_mu + kkk)%input_buffer_len*2 + 0);
+        ytemp[j][1] = _MM_LOAD(
+          input_buffer + (input_buffer_ptr + j*d_mu + kkk)%input_buffer_len*2 + 1);
+      }
+
+#pragma unroll(J_UNROLL_FACTOR)
+      for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
+#pragma unroll(THETA_UNROLL_FACTOR)
+        for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
+          temp[j][theta][0] = _MM_FMADDSUB(
+            xl[theta][0], ytemp[j][0],
+            _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][0], ytemp[j][0])));
+          temp[j][theta][1] = _MM_FMADDSUB(
+            xl[theta][1], ytemp[j][1],
+            _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][1], ytemp[j][1])));
+        }
+      }
+
+      for (kkk = 1; kkk < B; kkk++) {
+#pragma unroll(THETA_UNROLL_FACTOR)
+        for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
+          xl[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2); \
+          xh[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2 + 1);
+
+          xl[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2); \
+          xh[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2 + 1);
+        }
+
+#pragma unroll(J_UNROLL_FACTOR)
+        for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
+          ytemp[j][0] = _MM_LOAD(
+            input_buffer + (input_buffer_ptr + j*d_mu + kkk)%input_buffer_len*2 + 0);
+          ytemp[j][1] = _MM_LOAD(
+            input_buffer + (input_buffer_ptr + j*d_mu + kkk)%input_buffer_len*2 + 1);
+        }
+
+#pragma unroll(J_UNROLL_FACTOR)
+        for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
+#pragma unroll(THETA_UNROLL_FACTOR)
+          for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
+            temp[j][theta][0] = _MM_ADD(
+              temp[j][theta][0],
+              _MM_FMADDSUB(
+                xl[theta][0], ytemp[j][0],
+                _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][0], ytemp[j][0]))));
+            temp[j][theta][1] = _MM_ADD(
+              temp[j][theta][1],
+              _MM_FMADDSUB(
+                xl[theta][1], ytemp[j][1],
+                _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][1], ytemp[j][1]))));
+          }
+        }
+      }
+
+#pragma unroll(J_UNROLL_FACTOR)
+      for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
+#pragma unroll(THETA_UNROLL_FACTOR)
+        for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
+          _MM_STREAM(
+            (VAL_TYPE *)(v_tmp + S*(j*N_MU + theta_0 + theta)),
+            temp[j][theta][0]);
+          _MM_STREAM(
+            (VAL_TYPE *)(v_tmp + S*(j*N_MU + theta_0 + theta)) + SIMD_WIDTH,
+            temp[j][theta][1]);
+        }
+      }
 
       /*if (0 == rank && 0 == threadid) {
         for (int t = 0; t < THETA_UNROLL_FACTOR; ++t) {
@@ -300,82 +307,86 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
     unsigned long long t3 = __rdtsc();
     cfft_size_t l = M_hat/d->P;
 
-#if N_MU == 8
-    for (int jj = j*n_mu ; jj < (j + 1)*n_mu/SIMD_WIDTH*SIMD_WIDTH; jj += 2*SIMD_WIDTH) {
-      cfft_size_t s = 0;
-      for (cfft_size_t s = 0; s < d->S; s += SIMD_WIDTH) {
+#ifdef __AVX__
+    if (8 == N_MU) {
+      for (int jj = j*n_mu ; jj < (j + 1)*n_mu/SIMD_WIDTH*SIMD_WIDTH; jj += 2*SIMD_WIDTH) {
+        cfft_size_t s = 0;
+        for (cfft_size_t s = 0; s < S; s += SIMD_WIDTH) {
 #if PRECISION == 1
-        // TODO!
+          // TODO!
 #else
-        cfft_complex_t *in = v_tmp + S*(jj - j*n_mu) + s;
+          cfft_complex_t *in = v_tmp + S*(jj - j*n_mu) + s;
 
-        SIMDFPTYPE a11 = _MM_LOAD(in);
-        SIMDFPTYPE a21 = _MM_LOAD(in + 2);
-        SIMDFPTYPE a12 = _MM_LOAD(in + 1*S);
-        SIMDFPTYPE a22 = _MM_LOAD(in + 1*S + 2);
-        SIMDFPTYPE a31 = _MM_LOAD(in + 2*S);
-        SIMDFPTYPE a41 = _MM_LOAD(in + 2*S + 2);
-        SIMDFPTYPE a32 = _MM_LOAD(in + 3*S);
-        SIMDFPTYPE a42 = _MM_LOAD(in + 3*S + 2);
+          SIMDFPTYPE a11 = _MM_LOAD(in);
+          SIMDFPTYPE a21 = _MM_LOAD(in + 2);
+          SIMDFPTYPE a12 = _MM_LOAD(in + 1*S);
+          SIMDFPTYPE a22 = _MM_LOAD(in + 1*S + 2);
+          SIMDFPTYPE a31 = _MM_LOAD(in + 2*S);
+          SIMDFPTYPE a41 = _MM_LOAD(in + 2*S + 2);
+          SIMDFPTYPE a32 = _MM_LOAD(in + 3*S);
+          SIMDFPTYPE a42 = _MM_LOAD(in + 3*S + 2);
 
-        SIMDFPTYPE a51 = _MM_LOAD(in + 4*S);
-        SIMDFPTYPE a61 = _MM_LOAD(in + 4*S + 2);
-        SIMDFPTYPE a52 = _MM_LOAD(in + 5*S);
-        SIMDFPTYPE a62 = _MM_LOAD(in + 5*S + 2);
-        SIMDFPTYPE a71 = _MM_LOAD(in + 6*S);
-        SIMDFPTYPE a81 = _MM_LOAD(in + 6*S + 2);
-        SIMDFPTYPE a72 = _MM_LOAD(in + 7*S);
-        SIMDFPTYPE a82 = _MM_LOAD(in + 7*S + 2);
+          SIMDFPTYPE a51 = _MM_LOAD(in + 4*S);
+          SIMDFPTYPE a61 = _MM_LOAD(in + 4*S + 2);
+          SIMDFPTYPE a52 = _MM_LOAD(in + 5*S);
+          SIMDFPTYPE a62 = _MM_LOAD(in + 5*S + 2);
+          SIMDFPTYPE a71 = _MM_LOAD(in + 6*S);
+          SIMDFPTYPE a81 = _MM_LOAD(in + 6*S + 2);
+          SIMDFPTYPE a72 = _MM_LOAD(in + 7*S);
+          SIMDFPTYPE a82 = _MM_LOAD(in + 7*S + 2);
 
-        SIMDFPTYPE b11 = _mm256_insertf128_pd(a11, _mm256_castpd256_pd128(a12), 1);
-        SIMDFPTYPE b12 = _mm256_permute2f128_pd(a11, a12, 0x31);
-        SIMDFPTYPE b21 = _mm256_insertf128_pd(a21, _mm256_castpd256_pd128(a22), 1);
-        SIMDFPTYPE b22 = _mm256_permute2f128_pd(a21, a22, 0x31);
-        SIMDFPTYPE b31 = _mm256_insertf128_pd(a31, _mm256_castpd256_pd128(a32), 1);
-        SIMDFPTYPE b32 = _mm256_permute2f128_pd(a31, a32, 0x31);
-        SIMDFPTYPE b41 = _mm256_insertf128_pd(a41, _mm256_castpd256_pd128(a42), 1);
-        SIMDFPTYPE b42 = _mm256_permute2f128_pd(a41, a42, 0x31);
+          SIMDFPTYPE b11 = _mm256_insertf128_pd(a11, _mm256_castpd256_pd128(a12), 1);
+          SIMDFPTYPE b12 = _mm256_permute2f128_pd(a11, a12, 0x31);
+          SIMDFPTYPE b21 = _mm256_insertf128_pd(a21, _mm256_castpd256_pd128(a22), 1);
+          SIMDFPTYPE b22 = _mm256_permute2f128_pd(a21, a22, 0x31);
+          SIMDFPTYPE b31 = _mm256_insertf128_pd(a31, _mm256_castpd256_pd128(a32), 1);
+          SIMDFPTYPE b32 = _mm256_permute2f128_pd(a31, a32, 0x31);
+          SIMDFPTYPE b41 = _mm256_insertf128_pd(a41, _mm256_castpd256_pd128(a42), 1);
+          SIMDFPTYPE b42 = _mm256_permute2f128_pd(a41, a42, 0x31);
 
-        SIMDFPTYPE b51 = _mm256_insertf128_pd(a51, _mm256_castpd256_pd128(a52), 1);
-        SIMDFPTYPE b52 = _mm256_permute2f128_pd(a51, a52, 0x31);
-        SIMDFPTYPE b61 = _mm256_insertf128_pd(a61, _mm256_castpd256_pd128(a62), 1);
-        SIMDFPTYPE b62 = _mm256_permute2f128_pd(a61, a62, 0x31);
-        SIMDFPTYPE b71 = _mm256_insertf128_pd(a71, _mm256_castpd256_pd128(a72), 1);
-        SIMDFPTYPE b72 = _mm256_permute2f128_pd(a71, a72, 0x31);
-        SIMDFPTYPE b81 = _mm256_insertf128_pd(a81, _mm256_castpd256_pd128(a82), 1);
-        SIMDFPTYPE b82 = _mm256_permute2f128_pd(a81, a82, 0x31);
+          SIMDFPTYPE b51 = _mm256_insertf128_pd(a51, _mm256_castpd256_pd128(a52), 1);
+          SIMDFPTYPE b52 = _mm256_permute2f128_pd(a51, a52, 0x31);
+          SIMDFPTYPE b61 = _mm256_insertf128_pd(a61, _mm256_castpd256_pd128(a62), 1);
+          SIMDFPTYPE b62 = _mm256_permute2f128_pd(a61, a62, 0x31);
+          SIMDFPTYPE b71 = _mm256_insertf128_pd(a71, _mm256_castpd256_pd128(a72), 1);
+          SIMDFPTYPE b72 = _mm256_permute2f128_pd(a71, a72, 0x31);
+          SIMDFPTYPE b81 = _mm256_insertf128_pd(a81, _mm256_castpd256_pd128(a82), 1);
+          SIMDFPTYPE b82 = _mm256_permute2f128_pd(a81, a82, 0x31);
 
-        cfft_complex_t *out = d->alpha_tilde + s*l + jj;
+          cfft_complex_t *out = d->alpha_tilde + s*l + jj;
 
-        _MM_STREAM(out, b11);
-        _MM_STREAM(out + 2, b31);
-        _MM_STREAM(out + 4, b51);
-        _MM_STREAM(out + 6, b71);
-        _MM_STREAM(out + l, b12);
-        _MM_STREAM(out + l + 2, b32);
-        _MM_STREAM(out + l + 4, b52);
-        _MM_STREAM(out + l + 6, b72);
-        _MM_STREAM(out + 2*l, b21);
-        _MM_STREAM(out + 2*l + 2, b41);
-        _MM_STREAM(out + 2*l + 4, b61);
-        _MM_STREAM(out + 2*l + 6, b81);
-        _MM_STREAM(out + 3*l, b22);
-        _MM_STREAM(out + 3*l + 2, b42);
-        _MM_STREAM(out + 3*l + 4, b62);
-        _MM_STREAM(out + 3*l + 6, b82);
+          _MM_STREAM(out, b11);
+          _MM_STREAM(out + 2, b31);
+          _MM_STREAM(out + 4, b51);
+          _MM_STREAM(out + 6, b71);
+          _MM_STREAM(out + l, b12);
+          _MM_STREAM(out + l + 2, b32);
+          _MM_STREAM(out + l + 4, b52);
+          _MM_STREAM(out + l + 6, b72);
+          _MM_STREAM(out + 2*l, b21);
+          _MM_STREAM(out + 2*l + 2, b41);
+          _MM_STREAM(out + 2*l + 4, b61);
+          _MM_STREAM(out + 2*l + 6, b81);
+          _MM_STREAM(out + 3*l, b22);
+          _MM_STREAM(out + 3*l + 2, b42);
+          _MM_STREAM(out + 3*l + 4, b62);
+          _MM_STREAM(out + 3*l + 6, b82);
 #endif // PRECISION
+        }
       }
     }
-#else // N_MU == 8
-    for (cfft_size_t theta = 0; theta < n_mu; ++theta) {
-      for (int s = 0; s < S; s++) {
-        cfft_size_t l = M_hat/d->P;
+    else
+#endif // __AVX__
+    { // N_MU == 8
+      for (cfft_size_t theta = 0; theta < n_mu; ++theta) {
+        for (int s = 0; s < S; s++) {
+          cfft_size_t l = M_hat/d->P;
 
-        d->alpha_tilde[s*l + j*n_mu + theta] =
-          gamma_tilde_dt[S*(j*n_mu + theta) + s];
+          d->alpha_tilde[s*l + j*n_mu + theta] =
+            gamma_tilde_dt[S*(j*n_mu + theta) + s];
+        }
       }
     }
-#endif // N_MU == 8
 
     if (0 == threadid) {
       transpose_clks += __rdtsc() - t3;
@@ -509,20 +520,23 @@ MPI_TIMED_SECTION_BEGIN();
 MPI_TIMED_SECTION_END(d->comm, "\ttime_fss_last");
 }
 
+extern "C"
+{
 extern void parallel_filter_subsampling_n_mu_8(soi_desc_t * d, cfft_complex_t * alpha_dt);
+}
 
 __declspec(noinline)
 void parallel_filter_subsampling(soi_desc_t * d, cfft_complex_t * alpha_dt)
 {
-  if (5 == d->n_mu) {
-    parallel_filter_subsampling_n_mu_5(d, alpha_dt);
+  if (5 == d->n_mu && 4 == d->d_mu) {
+    parallel_filter_subsampling<5, 4>(d, alpha_dt);
   }
-  else if (8 == d->n_mu) {
-    parallel_filter_subsampling_n_mu_8(d, alpha_dt);
+  else if (8 == d->n_mu && 7 == d->d_mu) {
+    parallel_filter_subsampling<8, 7>(d, alpha_dt);
   }
   else {
     if (0 == d->rank) {
-      fprintf(stderr, "Unsupported n_mu. Try 5 or 8\n");
+      fprintf(stderr, "Unsupported n_mu and d_mu. Try n_mu=5 && d_mu=4 or n_mu=8 && d_mu=7\n");
     }
     exit(-1);
     assert(0);

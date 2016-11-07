@@ -3,6 +3,7 @@ ifeq ($(MKLROOT),)
 endif
 
 CC=mpiicc
+CXX=mpiicpc
 
 CFLAGS = -qopenmp -Qoption,cpp,--extended_float_type -Wall #-D_XOPEN_SOURCE=600
 CFLAGS += -DMKL_ILP64 -I$(MKLROOT)/include -I$(BOOST_INCLUDE)
@@ -24,9 +25,10 @@ endif
 
 EXE_EXT=exe
 OBJ_EXT=o
-SRCS = pfft.c parallel_filter_subsampling.c parallel_filter_subsampling_n_mu_8.c input.c cpu_freq.c compress.c
+SRCS = pfft.c parallel_filter_subsampling_n_mu_8.c input.c cpu_freq.c compress.c
+CXX_SRCS = parallel_filter_subsampling.cpp
 TEST_SRCS = test.c $(SRCS)
-OBJECTS = $(TEST_SRCS:.c=.$(OBJ_EXT))
+OBJECTS = $(TEST_SRCS:.c=.$(OBJ_EXT)) $(CXX_SRCS:.cpp=.$(OBJ_EXT))
 
 all: test.exe
 
@@ -38,6 +40,9 @@ input.$(OBJ_EXT): input.c
 
 %.$(OBJ_EXT): %.c
 	$(CC) -c -std=c99 $(CFLAGS) $< -o $@
+
+%.$(OBJ_EXT): %.cpp
+	$(CXX) -c -std=c99 $(CFLAGS) $< -o $@
 
 %.s: %.c
 	$(CC) -c -std=c99 $(CFLAGS) $< -S -fsource-asm
