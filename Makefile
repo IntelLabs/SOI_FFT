@@ -24,7 +24,7 @@ endif
 
 EXE_EXT=exe
 OBJ_EXT=o
-SRCS = pfft.c parallel_filter_subsampling.c input.c cpu_freq.c compress.c
+SRCS = pfft.c parallel_filter_subsampling.c parallel_filter_subsampling_n_mu_8.c input.c cpu_freq.c compress.c
 TEST_SRCS = test.c $(SRCS)
 OBJECTS = $(TEST_SRCS:.c=.$(OBJ_EXT))
 

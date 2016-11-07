@@ -227,6 +227,8 @@ void init_soi_descriptor(soi_desc_t *d, MPI_Comm comm, cfft_size_t k)
     CHECK_DFTI( DftiCreateDescriptor(&(d->desc_dft_m_hat), DFTI_TYPE, DFTI_COMPLEX, 1, (long)(M_hat)) );
     CHECK_DFTI( DftiCommitDescriptor(d->desc_dft_m_hat) );
   }
+
+  get_cpu_freq();
 }
 
 void free_soi_descriptor(soi_desc_t * d)

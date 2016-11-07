@@ -50,7 +50,7 @@
 extern double get_cpu_freq();
 
 __declspec(noinline)
-void parallel_filter_subsampling_n_mu_5(soi_desc_t * d, cfft_complex_t * alpha_dt)
+void parallel_filter_subsampling_n_mu_8(soi_desc_t * d, cfft_complex_t * alpha_dt)
 {
   cfft_complex_t *gamma_tilde_dt = d->gamma_tilde;
   cfft_complex_t *w = d->w;
@@ -117,7 +117,8 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #endif
 
 #define J_UNROLL_FACTOR 2
-#define N_MU 5
+#define N_MU 8
+
 #define THETA_UNROLL_FACTOR N_MU
 
   int num_thread_groups = MIN(S/(CACHE_LINE_LEN/2), 8);
@@ -176,8 +177,8 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 
     for (cfft_size_t j = j_begin; j < j_end; j += J_UNROLL_FACTOR) {
 
-// N_MU = 5, D_MU = 4
-#define D_MU_TIMES_J_UNROLL_FACTOR 8
+// N_MU = 8, D_MU = 7
+#define D_MU_TIMES_J_UNROLL_FACTOR 14
 
 #define LOAD_INPUT_TO_BUFFER(z, k, dummy) \
       input_buffer[(input_buffer_ptr + B - d_mu + k)%input_buffer_len*2] = \
@@ -303,7 +304,7 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 #if N_MU == 8
     for (int jj = j*n_mu ; jj < (j + 1)*n_mu/SIMD_WIDTH*SIMD_WIDTH; jj += 2*SIMD_WIDTH) {
       cfft_size_t s = 0;
-      for (cfft_size_t s = 0; s < d->S; s += SIMD_WIDTH) {
+      for (cfft_size_t s = 0; s < S; s += SIMD_WIDTH) {
 #if PRECISION == 1
         // TODO!
 #else
@@ -507,24 +508,4 @@ MPI_TIMED_SECTION_BEGIN();
     }
 	CFFT_ASSERT_MPI( MPI_Wait(&request_send, MPI_STATUS_IGNORE) );
 MPI_TIMED_SECTION_END(d->comm, "\ttime_fss_last");
-}
-
-extern void parallel_filter_subsampling_n_mu_8(soi_desc_t * d, cfft_complex_t * alpha_dt);
-
-__declspec(noinline)
-void parallel_filter_subsampling(soi_desc_t * d, cfft_complex_t * alpha_dt)
-{
-  if (5 == d->n_mu) {
-    parallel_filter_subsampling_n_mu_5(d, alpha_dt);
-  }
-  else if (8 == d->n_mu) {
-    parallel_filter_subsampling_n_mu_8(d, alpha_dt);
-  }
-  else {
-    if (0 == d->rank) {
-      fprintf(stderr, "Unsupported n_mu. Try 5 or 8\n");
-    }
-    exit(-1);
-    assert(0);
-  }
 }
