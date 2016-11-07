@@ -116,8 +116,14 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
     load_imbalance_times[i] = 0;
 #endif
 
-  const int J_UNROLL_FACTOR = 2;
-  const int THETA_UNROLL_FACTOR = N_MU;
+#ifdef __AVX512F__
+  const int REG_BLOCK_SIZE = 30; // use at most 30 SIMD registers out of 32
+#else
+  const int REG_BLOCK_SIZE = 14; // use at most 14 SIMD registers out of 16
+#endif
+
+  const int THETA_UNROLL_FACTOR = N_MU <= REG_BLOCK_SIZE ? N_MU : REG_BLOCK_SIZE;
+  const int J_UNROLL_FACTOR = REG_BLOCK_SIZE/THETA_UNROLL_FACTOR < 1 ? 1 : REG_BLOCK_SIZE/THETA_UNROLL_FACTOR;
 
   int num_thread_groups = MIN(S/(CACHE_LINE_LEN/2), 8);
   if (0 == rank && nthreads < num_thread_groups) {
@@ -180,53 +186,22 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
 
       for (cfft_size_t theta_0 = 0; theta_0 < N_MU; theta_0 += THETA_UNROLL_FACTOR) {
 
-      SIMDFPTYPE *in = d->w_dup + i*B*N_MU;
+        SIMDFPTYPE *in = d->w_dup + i*B*N_MU;
 
-      SIMDFPTYPE xl[THETA_UNROLL_FACTOR][2], xh[THETA_UNROLL_FACTOR][2];
+        SIMDFPTYPE xl[THETA_UNROLL_FACTOR][2], xh[THETA_UNROLL_FACTOR][2];
 
-      cfft_size_t kkk = 0;
-#pragma unroll(THETA_UNROLL_FACTOR)
-      for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
-        xl[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2); \
-        xh[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2 + 1);
-
-        xl[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2); \
-        xh[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2 + 1);
-      }
-
-      SIMDFPTYPE temp[J_UNROLL_FACTOR][THETA_UNROLL_FACTOR][2];
-      SIMDFPTYPE ytemp[J_UNROLL_FACTOR][2];
-
-#pragma unroll(J_UNROLL_FACTOR)
-      for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
-        ytemp[j][0] = _MM_LOAD(
-          input_buffer + (input_buffer_ptr + j*d_mu + kkk)%input_buffer_len*2 + 0);
-        ytemp[j][1] = _MM_LOAD(
-          input_buffer + (input_buffer_ptr + j*d_mu + kkk)%input_buffer_len*2 + 1);
-      }
-
-#pragma unroll(J_UNROLL_FACTOR)
-      for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
+        cfft_size_t kkk = 0;
 #pragma unroll(THETA_UNROLL_FACTOR)
         for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
-          temp[j][theta][0] = _MM_FMADDSUB(
-            xl[theta][0], ytemp[j][0],
-            _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][0], ytemp[j][0])));
-          temp[j][theta][1] = _MM_FMADDSUB(
-            xl[theta][1], ytemp[j][1],
-            _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][1], ytemp[j][1])));
-        }
-      }
-
-      for (kkk = 1; kkk < B; kkk++) {
-#pragma unroll(THETA_UNROLL_FACTOR)
-        for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
-          xl[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2); \
+          xl[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2);
           xh[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2 + 1);
 
-          xl[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2); \
+          xl[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2);
           xh[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2 + 1);
         }
+
+        SIMDFPTYPE temp[J_UNROLL_FACTOR][THETA_UNROLL_FACTOR][2];
+        SIMDFPTYPE ytemp[J_UNROLL_FACTOR][2];
 
 #pragma unroll(J_UNROLL_FACTOR)
         for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
@@ -240,42 +215,73 @@ MPI_TIMED_SECTION_END_WO_NEWLINE(d->comm, "\ttime_fss_ghost");
         for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
 #pragma unroll(THETA_UNROLL_FACTOR)
           for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
-            temp[j][theta][0] = _MM_ADD(
-              temp[j][theta][0],
-              _MM_FMADDSUB(
-                xl[theta][0], ytemp[j][0],
-                _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][0], ytemp[j][0]))));
-            temp[j][theta][1] = _MM_ADD(
-              temp[j][theta][1],
-              _MM_FMADDSUB(
-                xl[theta][1], ytemp[j][1],
-                _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][1], ytemp[j][1]))));
+            temp[j][theta][0] = _MM_FMADDSUB(
+              xl[theta][0], ytemp[j][0],
+              _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][0], ytemp[j][0])));
+            temp[j][theta][1] = _MM_FMADDSUB(
+              xl[theta][1], ytemp[j][1],
+              _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][1], ytemp[j][1])));
           }
         }
-      }
+
+        for (kkk = 1; kkk < B; kkk++) {
+#pragma unroll(THETA_UNROLL_FACTOR)
+          for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
+            xl[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2);
+            xh[theta][0] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 0*2 + 1);
+
+            xl[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2);
+            xh[theta][1] = _MM_LOAD(in + (kkk*N_MU + theta_0 + theta)*(CACHE_LINE_LEN/2) + 1*2 + 1);
+          }
 
 #pragma unroll(J_UNROLL_FACTOR)
-      for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
+          for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
+            ytemp[j][0] = _MM_LOAD(
+              input_buffer + (input_buffer_ptr + j*d_mu + kkk)%input_buffer_len*2 + 0);
+            ytemp[j][1] = _MM_LOAD(
+              input_buffer + (input_buffer_ptr + j*d_mu + kkk)%input_buffer_len*2 + 1);
+          }
+
+#pragma unroll(J_UNROLL_FACTOR)
+          for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
 #pragma unroll(THETA_UNROLL_FACTOR)
-        for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
-          _MM_STREAM(
-            (VAL_TYPE *)(v_tmp + S*(j*N_MU + theta_0 + theta)),
-            temp[j][theta][0]);
-          _MM_STREAM(
-            (VAL_TYPE *)(v_tmp + S*(j*N_MU + theta_0 + theta)) + SIMD_WIDTH,
-            temp[j][theta][1]);
+            for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
+              temp[j][theta][0] = _MM_ADD(
+                temp[j][theta][0],
+                _MM_FMADDSUB(
+                  xl[theta][0], ytemp[j][0],
+                  _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][0], ytemp[j][0]))));
+              temp[j][theta][1] = _MM_ADD(
+                temp[j][theta][1],
+                _MM_FMADDSUB(
+                  xl[theta][1], ytemp[j][1],
+                  _MM_SWAP_REAL_IMAG(_MM_MUL(xh[theta][1], ytemp[j][1]))));
+            }
+          }
         }
-      }
 
-      /*if (0 == rank && 0 == threadid) {
-        for (int t = 0; t < THETA_UNROLL_FACTOR; ++t) {
-          cfft_complex_t c = v_tmp[S*(theta + t)];
-          printf("(%g %g) ", __real__(c), __imag__(c));
+#pragma unroll(J_UNROLL_FACTOR)
+        for (int j = 0; j < J_UNROLL_FACTOR; ++j) {
+#pragma unroll(THETA_UNROLL_FACTOR)
+          for (int theta = 0; theta < THETA_UNROLL_FACTOR; ++theta) {
+            _MM_STREAM(
+              (VAL_TYPE *)(v_tmp + S*(j*N_MU + theta_0 + theta)),
+              temp[j][theta][0]);
+            _MM_STREAM(
+              (VAL_TYPE *)(v_tmp + S*(j*N_MU + theta_0 + theta)) + SIMD_WIDTH,
+              temp[j][theta][1]);
+          }
         }
-        printf("\n");
-      }*/
 
-      }
+        /*if (0 == rank && 0 == threadid) {
+          for (int t = 0; t < THETA_UNROLL_FACTOR; ++t) {
+            cfft_complex_t c = v_tmp[S*(theta + t)];
+            printf("(%g %g) ", __real__(c), __imag__(c));
+          }
+          printf("\n");
+        }*/
+      } // theta
+
       input_buffer_ptr = (input_buffer_ptr + d_mu*J_UNROLL_FACTOR)%input_buffer_len;
     } // JJ
   } // i
