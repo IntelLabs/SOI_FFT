@@ -17,6 +17,8 @@ Tak Peter Tang, Pradeep Dubey, and Daehyun Kim, The International Conference for
 High Performance Computing, Networking, Storage, and Analysis, 2013,
 http://pcl.intel-research.net/publications/a34-park.pdf
 
+![Alt text](results/soi_xeon_phi.png?raw=true "Performance Comparison of SOI and Cooley-Tukey FFT on Xeon and Xeon Phi")
+
 It is somewhat embarrassing that it took us 4 years to open source this work due
 to our laziness. :(
 Still, we hope our code can be useful for those who need a fast multi-node FFT
