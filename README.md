@@ -1,4 +1,12 @@
 # SOI_FFT
+
+> :warning: **DISCONTINUATION OF PROJECT** - 
+> *This project will no longer be maintained by Intel.
+> Intel has ceased development and contributions including, but not limited to, maintenance, bug fixes, new releases, or updates, to this project.*
+> **Intel no longer accepts patches to this project.**
+> *If you have an ongoing need to use this project, are interested in independently developing it, or would like to maintain patches for the open source software community, please create your own fork of this project.*
+
+
 Segment-of-interest low-communication FFT algorithm.
 Instead of 3 all-to-all communications required for multi-node 1D FFT using
 Cooley-Tukey decomposition, SOI FFT only needs 1 all-to-all.
